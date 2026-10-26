@@ -2,6 +2,7 @@
 """منو، عضویت اجباری، الماس، دعوت، انتقال و رسید پرداخت."""
 import os
 import re
+import secrets
 import time
 from decimal import Decimal
 from sqlalchemy import Column, BigInteger, String, Numeric, Integer, Boolean, inspect, text
@@ -41,6 +42,21 @@ class Payment(Base):
     plan = Column(String(20), nullable=False)
     status = Column(String(20), default='pending')
     created = Column(Integer, default=lambda: int(time.time()))
+
+class GiftCode(Base):
+    __tablename__ = 'gift_codes'
+    code = Column(String(32), primary_key=True)
+    amount = Column(Numeric(12, 1), nullable=False)
+    max_uses = Column(Integer, nullable=False, default=1)
+    used = Column(Integer, nullable=False, default=0)
+    expires = Column(Integer, nullable=True)
+    created = Column(Integer, default=lambda: int(time.time()))
+    creator = Column(BigInteger, nullable=True)
+class GiftRedeem(Base):
+    __tablename__ = 'gift_redeems'
+    code = Column(String(32), primary_key=True)
+    user_id = Column(BigInteger, primary_key=True)
+    ts = Column(Integer, default=lambda: int(time.time()))
 
 def _migrate_wallet():
     # create_all does not add columns to existing SQLite/Postgres tables.
@@ -121,6 +137,7 @@ def home_kb():
         [btn('ساخت سلف', 'shop:create', style='success')],
         [btn('خرید الماس', 'shop:buy')],
         [btn('دعوت دوستان', 'shop:invite'), btn('انتقال الماس', 'shop:transfer')],
+        [btn('کد هدیه', 'shop:code', style='success')],
         [btn('آموزش استفاده', 'shop:help'), btn('درباره سلف', 'shop:about')],
         [btn('حساب کاربری', 'shop:dash')],
     ])
@@ -135,6 +152,52 @@ async def is_member(bot,uid):
         except Exception:
             return False
     return True
+_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+def make_gift(creator, amount, max_uses, hours=None):
+    s = get_session()
+    try:
+        for _ in range(10):
+            code = 'RUBI-' + ''.join(secrets.choice(_CODE_CHARS) for _ in range(8))
+            if not s.get(GiftCode, code):
+                break
+        exp = int(time.time()) + int(hours) * 3600 if hours else None
+        s.add(GiftCode(code=code, amount=Decimal(str(amount)), max_uses=int(max_uses), used=0, expires=exp, creator=creator))
+        s.commit()
+        return code
+    finally:
+        s.close()
+
+def redeem_gift(uid, code):
+    """('ok', amount, balance) یا (علت, None, None)."""
+    code = (code or '').strip().upper()
+    s = get_session()
+    try:
+        g = s.query(GiftCode).filter(GiftCode.code == code).with_for_update().one_or_none()
+        if not g:
+            return ('invalid', None, None)
+        now = int(time.time())
+        if g.expires and now > g.expires:
+            return ('expired', None, None)
+        if (g.used or 0) >= g.max_uses:
+            return ('finished', None, None)
+        if s.get(GiftRedeem, (code, uid)):
+            return ('already', None, None)
+        w = s.get(Wallet, uid)
+        if not w:
+            w = Wallet(user_id=uid, balance=Decimal('0.0'), last_charge=now)
+            s.add(w)
+        w.balance = Decimal(w.balance or 0) + Decimal(g.amount)
+        g.used = (g.used or 0) + 1
+        s.add(GiftRedeem(code=code, user_id=uid))
+        s.commit()
+        return ('ok', Decimal(g.amount), Decimal(w.balance))
+    except Exception:
+        s.rollback()
+        return ('invalid', None, None)
+    finally:
+        s.close()
+
 def fmt_bal(x):
     d = Decimal(x or 0).quantize(Decimal('0.1'))
     t = format(d, 'f')
@@ -248,6 +311,8 @@ async def callback(update,context):
     elif data=='shop:invite':
         me=await context.bot.get_me(); link=f'https://t.me/{me.username}?start=ref{uid}'
         await show_panel(q, f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:code':
+        context.user_data['gift_step']='redeem'; await show_panel(q, '🎁 کد هدیه‌ات رو بفرست (مثل RUBI-XXXXXXXX). برای لغو بنویس «لغو».')
     elif data=='shop:transfer':
         context.user_data['transfer_step']='recipient'; await show_panel(q, 'آیدی عددی گیرنده یا @شناسه کاربری رو بفرست:')
 async def payment_review(update, context):
@@ -314,8 +379,29 @@ async def support_panel(update, context):
 async def incoming(update,context):
     m=update.effective_message; u=update.effective_user
     if not m or not u or update.effective_chat.type!='private': return
+    if context.user_data.get('gift_step')=='admin_new' and u.id in selfbot.ADMIN_IDS and m.text:
+        t=m.text.strip()
+        if t=='لغو':
+            context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
+        await _gift_create(m, context, t); return
     if not await is_member(context.bot,u.id):
         await m.reply_text('برای استفاده باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
+    if context.user_data.get('gift_step')=='redeem' and m.text:
+        t=m.text.strip()
+        if t=='لغو':
+            context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.',reply_markup=home_kb()); return
+        now=time.time(); fails=[x for x in context.user_data.get('gift_fail',[]) if now-x<600]
+        if len(fails)>=5:
+            await m.reply_text('⛔ تلاش‌های اشتباه زیاد بود؛ ۱۰ دقیقه دیگه دوباره امتحان کن.'); return
+        res,amt,bal=redeem_gift(u.id,t)
+        if res=='ok':
+            context.user_data.pop('gift_step',None); context.user_data.pop('gift_fail',None)
+            await m.reply_text(f'🎉 کد هدیه ثبت شد!\n💎 {fmt_bal(amt)} الماس به حسابت اضافه شد.\n💰 موجودی جدید: {fmt_bal(bal)} الماس',reply_markup=home_kb()); return
+        if res=='invalid':
+            fails.append(now); context.user_data['gift_fail']=fails
+        msgs={'invalid':'❌ کد معتبر نیست؛ دوباره بفرست یا «لغو» بنویس.','expired':'⌛ این کد منقضی شده.','finished':'😕 ظرفیت این کد تموم شده.','already':'ℹ️ این کد رو قبلاً استفاده کردی.'}
+        if res!='invalid': context.user_data.pop('gift_step',None)
+        await m.reply_text(msgs.get(res,'❌ کد معتبر نیست.')); return
     plan=context.user_data.get('payment_plan')
     if plan and (m.photo or m.document):
         s=get_session()
@@ -412,6 +498,35 @@ async def charge_job(context):
         s.commit()
     finally:s.close()
 
+async def _gift_create(m, context, t):
+    parts=t.replace(',',' ').split()
+    try:
+        amount=Decimal(parts[0]); uses=int(parts[1]) if len(parts)>1 else 1; hours=int(parts[2]) if len(parts)>2 else None
+        if amount<=0 or amount>100000 or uses<1 or uses>10000 or (amount*10)!=(amount*10).to_integral_value(): raise ValueError
+    except Exception:
+        await m.reply_text('فرمت درست نیست. مثال: 100 5  (۱۰۰ الماس، ۵ نفر) یا 100 5 48 (با اعتبار ۴۸ ساعته). برای لغو بنویس «لغو».'); return
+    code=make_gift(m.from_user.id, amount, uses, hours)
+    context.user_data.pop('gift_step',None)
+    await m.reply_text(f'🎁 کد هدیه ساخته شد:\n\n{code}\n\n💎 {fmt_bal(amount)} الماس | 👥 {uses} بار استفاده'+(f' | ⏳ {hours} ساعت' if hours else '')+'\nکاربر باید از «کد هدیه» توی منوی ربات واردش کنه.')
+
+async def gift_cb(update, context):
+    q=update.callback_query
+    if q.from_user.id not in selfbot.ADMIN_IDS:
+        await q.answer('دسترسی نداری.', show_alert=True); return
+    await q.answer()
+    act=(q.data or '').split(':')[1]
+    if act=='new':
+        context.user_data['gift_step']='admin_new'
+        await q.message.reply_text('🎁 ساخت کد هدیه\n\nمقدار الماس و تعداد دفعات استفاده رو بفرست:\n100 5  ← ۱۰۰ الماس برای ۵ نفر\n100 5 48  ← با اعتبار ۴۸ ساعته\nبرای لغو بنویس «لغو».')
+    elif act=='list':
+        s=get_session()
+        try:
+            rows=s.query(GiftCode).order_by(GiftCode.created.desc()).limit(15).all()
+            lines=[f'{g.code} | 💎 {fmt_bal(g.amount)} | {g.used}/{g.max_uses}'+(' | ⌛' if g.expires and g.expires<int(time.time()) else '') for g in rows]
+        finally:
+            s.close()
+        await q.message.reply_text('🎟 آخرین کدهای هدیه (کد | الماس | استفاده):\n\n'+('\n'.join(lines) if lines else 'هنوز کدی ساخته نشده.'))
+
 _BAL_RE = r'^\s*(موجودی|موجودی من|موجودی\s*من\s*چقدره|موجودیم)\s*[؟?!.]*\s*$'
 
 def _bal_kb(uid, balance):
@@ -450,6 +565,7 @@ def setup(app):
     _migrate_wallet()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_BAL_RE), balance_cmd), group=-11)
     app.add_handler(CallbackQueryHandler(balance_cb, pattern=r'^bal:'), group=-11)
+    app.add_handler(CallbackQueryHandler(gift_cb, pattern=r'^gift:'), group=-20)
     app.add_handler(CommandHandler('start',start),group=-10)
     app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject):'), group=-20)
     app.add_handler(CommandHandler('support', support_panel), group=-10)

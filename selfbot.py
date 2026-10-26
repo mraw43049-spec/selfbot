@@ -206,6 +206,11 @@ async def stop_client(uid, logout=False, restore=False):
     for task in _feature_tasks.pop(uid, []):
         task.cancel()
     _typing_emit_at.pop(uid, None)
+    try:
+        import extras
+        extras.cleanup(uid)
+    except Exception:  # noqa: BLE001
+        pass
     _slots.pop(uid, None)
     if c and restore:
         try:
@@ -252,6 +257,11 @@ async def start_client(uid):
     async def _raw_typing(update, _uid=uid, _client=client):
         await _mirror_typing(_uid, _client, update)
     client.add_event_handler(_raw_typing, events.Raw)
+    try:
+        import extras
+        extras.attach(uid, client)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("extras attach %s: %s", uid, e)
     _clients[uid] = client
     _sync_auto(uid)
     _sync_clock(uid)
@@ -952,7 +962,8 @@ async def emoji_send(uid, ev, arg):
 _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "ترجمه": "translate", "translate": "translate",
         "تگ": "tag", "tag": "tag", "ریاکشن": "react", "واکنش": "react",
-        "react": "react", "reykt": "react", "reaction": "react"}
+        "react": "react", "reykt": "react", "reaction": "react",
+        "ذخیره": "save", "save": "save"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1117,6 +1128,10 @@ async def _handle_dot(uid, ev):
             except Exception: pass
         except Exception as e:
             await _say(uid, ev, "تگ اعضا انجام نشد؛ ممکن است تلگرام دسترسی اعضا را محدود کرده باشد. " + str(e)[:70])
+        return True
+    if cmd == "save":
+        import extras
+        await _say(uid, ev, await extras.save_replied(uid, ev))
         return True
     # تنظیمات سلف فقط از دکمه‌های .پنل انجام می‌شوند؛ فرمان‌های قدیمی تنظیم
     # کلمه/زمان/گپ/دکمه/کپی/ساعت در چت‌ها دیگر تنظیمات را تغییر نمی‌دهند.
@@ -1447,6 +1462,11 @@ async def cb_user(update, context):
     await q.answer()
     if not (a == "e" and p[3] == "word"):
         _capture.pop(uid, None)
+
+    import extras
+    if a in extras.CB_ACTIONS:
+        await extras.handle_cb(uid, a, p, qm, context)
+        return
 
     async def home():
         ud.pop("self_st", None)
@@ -1784,6 +1804,11 @@ async def user_text(update, context):
     if not _allowed(uid):
         ud.pop("self_st", None)
         return
+    if st.get("step") in ("ar_text", "wl_add"):
+        import extras
+        ud.pop("self_st", None)
+        await extras.handle_text(uid, st, text, msg, context)
+        raise ApplicationHandlerStop
     raise_stop = True
     try:
         if text in ("لغو", "/cancel"):
@@ -1879,6 +1904,7 @@ CMDS_TEXT = (
     ".گپ  ← همین گپ (یا .گپ اسم گروه)\n"
     ".ساعت  ← ساعت زنده کنار اسم\n"
     ".کپی  ← (ریپلای) کپی پروفایل | .غیرفعال کپی\n"
+    ".ذخیره  ← (ریپلای روی مدیا) ذخیره توی Saved Messages\n"
     ".ایموجی متن  ← ایموجی پریمیوم\n"
     ".ریاکشن 🔥❤👍  ← (ریپلای) تا ۳ ریاکشن روی همون پیام"
 )
@@ -1971,6 +1997,7 @@ def _inl_kb(uid, private=False):
     rows.insert(4, [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts", style="primary")])
     rows.insert(5, [B("راهنمای ترجمه", callback_data="self:translate_help", style="primary"),
                     B("راهنمای تگ اعضا", callback_data="self:tag_help", style="primary")])
+    rows.append([B("امکانات بیشتر", callback_data="self:more", style="success")])
     last = [B("دستورات سلف", callback_data="selfi:cmds", style="primary")]
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
     if private:
@@ -2174,6 +2201,8 @@ def admin_menu_kb():
                [B("⏹ غیرفعال‌سازی کاربر", callback_data="selfa:off")],
                [B("🗑 حذف کامل (خروج از سشن)", callback_data="selfa:del")],
                [B("📋 لیست کاربران سلف", callback_data="selfa:list")],
+               [B("🎁 ساخت کد هدیه", callback_data="gift:new")],
+               [B("🎟 کدهای هدیه", callback_data="gift:list")],
                [B("🔙 بازگشت", callback_data="admin:back")]])
 
 
