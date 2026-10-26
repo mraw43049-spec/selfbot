@@ -12,7 +12,7 @@
 
 - ساعت زنده کنار اسم: .ساعت (روشن) | .ساعت 3 (انتخاب فونت) | .ساعت فونت (لیست) | .غیرفعال ساعت
 - ایموجی پریمیوم (بدون اکانت پریمیوم، از طریق ربات اینلاین): .ایموجی متن [کد ایموجی]
-- ریاکشن: روی پیام کاربر ریپلای کن و بنویس .ریاکشن 🔥❤👍  یا  /reykt  (اکانت پریمیوم تا ۳ ریاکشن روی همون پیام)
+- ریاکشن: روی پیام کاربر ریپلای کن و بنویس .ریاکشن  یا  /reykt  (اختیاری: تعداد و ایموجی، مثل .ریاکشن 20 🔥)
 - کپی پروفایل: روی پیام یه کاربر ریپلای کن و بنویس .کپی  (اسم، بیو، عکس) | برگشت: .غیرفعال کپی
 
 امنیت: سشن‌ها رمزنگاری‌شده ذخیره می‌شن (Fernet)، سلف هیچ‌وقت روی ربات روباهیو کلیک نمی‌کنه،
@@ -813,44 +813,68 @@ async def send_premium(client, chat, text, reply_to=None):
     return True
 
 
-REACT_DEFAULT = ["❤", "🔥", "👍"]
-_EMO_RE = re.compile("(?:[\\U0001F1E6-\\U0001F1FF]{2}|[\\u2600-\\u27BF\\u2B00-\\u2BFF\\U0001F000-\\U0001F1E5\\U0001F200-\\U0001FAFF]\\ufe0f?[\\U0001F3FB-\\U0001F3FF]?(?:\\u200d[\\u2600-\\u27BF\\u2B00-\\u2BFF\\U0001F000-\\U0001F1E5\\U0001F200-\\U0001FAFF]\\ufe0f?)*)")
+_react_busy = set()
+REACT_MAX = 50
+REACT_DEFAULT = "❤"
 
 
 async def react_start(uid, ev, arg):
-    """.ریاکشن [ایموجی‌ها] روی پیام کاربر ریپلای کن؛ همون پیام ریاکشن می‌خوره.
-    اکانت پریمیوم تا ۳ ریاکشن هم‌زمان، اکانت عادی ۱ تا. مثل: .ریاکشن 🔥❤👍  یا  /reykt 🔥❤👍"""
-    from telethon import errors
-    from telethon.tl.functions.messages import SendReactionRequest
-    from telethon.tl.types import ReactionEmoji
+    """.ریاکشن [تعداد] [ایموجی] روی پیام کاربر ریپلای کن؛ تا N پیام آخرش (پیش‌فرض ۲۰) ریاکشن می‌خوره.
+    (هر پیام فقط یه ریاکشن از هر اکانت می‌گیره، پس «۲۰ ریاکشن» یعنی ۲۰ پیام اخیر اون کاربر.)"""
     client = _clients.get(uid)
     if not client:
         return "❌ اول اکانتت رو وصل کن (/self)."
     if not ev.is_reply:
-        return "↩️ روی پیام اون کاربر ریپلای کن و بنویس:\n.ریاکشن 🔥❤👍   یا   /reykt"
-    try:
-        me = await client.get_me()
-        limit = 3 if getattr(me, "premium", False) else 1
-        emos = []
-        for e in _EMO_RE.findall(arg or ""):
-            e = e.replace("\ufe0f", "")
-            if e and e not in emos:
-                emos.append(e)
-        emos = (emos or REACT_DEFAULT)[:limit]
-        await client(SendReactionRequest(peer=ev.chat_id, msg_id=ev.reply_to_msg_id,
-                                         reaction=[ReactionEmoji(emoticon=e) for e in emos]))
-    except errors.ReactionInvalidError:
-        return "❌ یکی از ایموجی‌ها به‌عنوان ریاکشن مجاز نیست."
-    except errors.FloodWaitError as e:
-        return f"⏳ تلگرام محدود کرد؛ {e.seconds} ثانیه صبر کن."
-    except Exception as e:  # noqa: BLE001
-        logger.info("self react %s: %s", uid, e)
-        return "⚠️ ارسال نشد: " + str(e)[:120]
-    try:
-        await ev.delete()      # پیام دستور پاک می‌شه
-    except Exception:  # noqa: BLE001
-        pass
+        return "↩️ روی پیام اون کاربر ریپلای کن و بنویس:\n.ریاکشن   یا   .ریاکشن 20 🔥"
+    if uid in _react_busy:
+        return "⏳ یه ریاکشن دیگه در جریانه؛ صبر کن تموم شه."
+    a = fa2en(arg or "")
+    m = re.search(r"\d+", a)
+    count = min(max(int(m.group(0)), 1), REACT_MAX) if m else 20
+    emo = re.sub(r"[\d\s]+", "", a).replace("\ufe0f", "") or REACT_DEFAULT
+    r = await ev.get_reply_message()
+    if not r or not r.sender_id:
+        return "❌ فرستنده‌ی این پیام مشخص نیست."
+    _react_busy.add(uid)
+    asyncio.create_task(_react_run(uid, ev, client, r, count, emo))
     return None
+
+
+async def _react_run(uid, ev, client, r, count, emo):
+    from telethon import errors
+    from telethon.tl.functions.messages import SendReactionRequest
+    from telethon.tl.types import ReactionEmoji
+    done = 0
+    err = None
+    try:
+        async for msg in client.iter_messages(ev.chat_id, offset_id=r.id + 1, limit=800):
+            if msg.sender_id != r.sender_id:
+                continue
+            try:
+                await client(SendReactionRequest(peer=ev.chat_id, msg_id=msg.id, reaction=[ReactionEmoji(emoticon=emo)]))
+                done += 1
+            except errors.FloodWaitError as e:
+                if e.seconds > 30:
+                    err = f"محدودیت تلگرام ({e.seconds} ثانیه)"
+                    break
+                await asyncio.sleep(e.seconds + 1)
+            except errors.ReactionInvalidError:
+                err = "این ایموجی به‌عنوان ریاکشن مجاز نیست"
+                break
+            except errors.ReactionsTooManyError:
+                continue
+            except Exception as e:  # noqa: BLE001
+                logger.info("self react %s: %s", uid, e)
+                err = str(e)[:80]
+                break
+            if done >= count:
+                break
+            await asyncio.sleep(0.8)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)[:80]
+    finally:
+        _react_busy.discard(uid)
+    await _say(uid, ev, f"{emo} {done} ریاکشن زده شد" + (f"\n⚠️ {err}" if err else ""))
 
 
 def _u16(t):
@@ -1637,7 +1661,7 @@ CMDS_TEXT = (
     ".ساعت  ← ساعت زنده کنار اسم\n"
     ".کپی  ← (ریپلای) کپی پروفایل | .غیرفعال کپی\n"
     ".ایموجی متن  ← ایموجی پریمیوم\n"
-    ".ریاکشن 🔥❤👍  ← (ریپلای) تا ۳ ریاکشن روی همون پیام"
+    ".ریاکشن  ← (ریپلای) ریاکشن روی پیام‌های کاربر"
 )
 
 
