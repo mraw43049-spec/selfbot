@@ -12,7 +12,7 @@
 
 - ساعت زنده کنار اسم: .ساعت (روشن) | .ساعت 3 (انتخاب فونت) | .ساعت فونت (لیست) | .غیرفعال ساعت
 - ایموجی پریمیوم (بدون اکانت پریمیوم، از طریق ربات اینلاین): .ایموجی متن [کد ایموجی]
-- ریاکشن: روی پیام کاربر ریپلای کن و بنویس .ریاکشن  یا  /reykt  (اختیاری: تعداد و ایموجی، مثل .ریاکشن 20 🔥)
+- ریاکشن: روی پیام کاربر ریپلای کن و بنویس .ریاکشن 🔥❤👍  یا  /reykt  (اکانت پریمیوم تا ۳ ریاکشن روی همون پیام)
 - کپی پروفایل: روی پیام یه کاربر ریپلای کن و بنویس .کپی  (اسم، بیو، عکس) | برگشت: .غیرفعال کپی
 
 امنیت: سشن‌ها رمزنگاری‌شده ذخیره می‌شن (Fernet)، سلف هیچ‌وقت روی ربات روباهیو کلیک نمی‌کنه،
@@ -32,7 +32,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, String, Text
 from telegram import InlineKeyboardButton as _IKB, InlineKeyboardMarkup as KB, KeyboardButton as _KB, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram import InlineQueryResultArticle, InlineQueryResultCachedPhoto, InlineQueryResultPhoto, InputTextMessageContent
+from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, InlineQueryHandler, MessageHandler, filters
 
 from database import Base, get_session
 
@@ -63,9 +64,9 @@ def _style_for(text, cd):
     return "primary"
 
 
-def B(text, callback_data=None, **kw):
+def B(text, callback_data=None, style=None, **kw):
     txt = _clean(text)
-    return _IKB(txt, callback_data=callback_data, api_kwargs={"style": _style_for(text, callback_data)}, **kw)
+    return _IKB(txt, callback_data=callback_data, api_kwargs={"style": style or _style_for(text, callback_data)}, **kw)
 
 
 def KeyboardButton(text, **kw):
@@ -442,6 +443,7 @@ async def _auto_fire(uid, client, s):
 async def start_all(app):
     _bot_id[0] = app.bot.id
     _botref[0] = app.bot
+    asyncio.create_task(prepare_banner(app))
     if not configured():
         logger.info("self: SELF_API_ID/SELF_API_HASH تنظیم نشده؛ سلف غیرفعال است")
         return
@@ -811,68 +813,44 @@ async def send_premium(client, chat, text, reply_to=None):
     return True
 
 
-_react_busy = set()
-REACT_MAX = 50
-REACT_DEFAULT = "❤"
+REACT_DEFAULT = ["❤", "🔥", "👍"]
+_EMO_RE = re.compile("(?:[\\U0001F1E6-\\U0001F1FF]{2}|[\\u2600-\\u27BF\\u2B00-\\u2BFF\\U0001F000-\\U0001F1E5\\U0001F200-\\U0001FAFF]\\ufe0f?[\\U0001F3FB-\\U0001F3FF]?(?:\\u200d[\\u2600-\\u27BF\\u2B00-\\u2BFF\\U0001F000-\\U0001F1E5\\U0001F200-\\U0001FAFF]\\ufe0f?)*)")
 
 
 async def react_start(uid, ev, arg):
-    """.ریاکشن [تعداد] [ایموجی] روی پیام کاربر ریپلای کن؛ تا N پیام آخرش (پیش‌فرض ۲۰) ریاکشن می‌خوره.
-    (هر پیام فقط یه ریاکشن از هر اکانت می‌گیره، پس «۲۰ ریاکشن» یعنی ۲۰ پیام اخیر اون کاربر.)"""
+    """.ریاکشن [ایموجی‌ها] روی پیام کاربر ریپلای کن؛ همون پیام ریاکشن می‌خوره.
+    اکانت پریمیوم تا ۳ ریاکشن هم‌زمان، اکانت عادی ۱ تا. مثل: .ریاکشن 🔥❤👍  یا  /reykt 🔥❤👍"""
+    from telethon import errors
+    from telethon.tl.functions.messages import SendReactionRequest
+    from telethon.tl.types import ReactionEmoji
     client = _clients.get(uid)
     if not client:
         return "❌ اول اکانتت رو وصل کن (/self)."
     if not ev.is_reply:
-        return "↩️ روی پیام اون کاربر ریپلای کن و بنویس:\n.ریاکشن   یا   .ریاکشن 20 🔥"
-    if uid in _react_busy:
-        return "⏳ یه ریاکشن دیگه در جریانه؛ صبر کن تموم شه."
-    a = fa2en(arg or "")
-    m = re.search(r"\d+", a)
-    count = min(max(int(m.group(0)), 1), REACT_MAX) if m else 20
-    emo = re.sub(r"[\d\s]+", "", a).replace("\ufe0f", "") or REACT_DEFAULT
-    r = await ev.get_reply_message()
-    if not r or not r.sender_id:
-        return "❌ فرستنده‌ی این پیام مشخص نیست."
-    _react_busy.add(uid)
-    asyncio.create_task(_react_run(uid, ev, client, r, count, emo))
-    return None
-
-
-async def _react_run(uid, ev, client, r, count, emo):
-    from telethon import errors
-    from telethon.tl.functions.messages import SendReactionRequest
-    from telethon.tl.types import ReactionEmoji
-    done = 0
-    err = None
+        return "↩️ روی پیام اون کاربر ریپلای کن و بنویس:\n.ریاکشن 🔥❤👍   یا   /reykt"
     try:
-        async for msg in client.iter_messages(ev.chat_id, offset_id=r.id + 1, limit=800):
-            if msg.sender_id != r.sender_id:
-                continue
-            try:
-                await client(SendReactionRequest(peer=ev.chat_id, msg_id=msg.id, reaction=[ReactionEmoji(emoticon=emo)]))
-                done += 1
-            except errors.FloodWaitError as e:
-                if e.seconds > 30:
-                    err = f"محدودیت تلگرام ({e.seconds} ثانیه)"
-                    break
-                await asyncio.sleep(e.seconds + 1)
-            except errors.ReactionInvalidError:
-                err = "این ایموجی به‌عنوان ریاکشن مجاز نیست"
-                break
-            except errors.ReactionsTooManyError:
-                continue
-            except Exception as e:  # noqa: BLE001
-                logger.info("self react %s: %s", uid, e)
-                err = str(e)[:80]
-                break
-            if done >= count:
-                break
-            await asyncio.sleep(0.8)
+        me = await client.get_me()
+        limit = 3 if getattr(me, "premium", False) else 1
+        emos = []
+        for e in _EMO_RE.findall(arg or ""):
+            e = e.replace("\ufe0f", "")
+            if e and e not in emos:
+                emos.append(e)
+        emos = (emos or REACT_DEFAULT)[:limit]
+        await client(SendReactionRequest(peer=ev.chat_id, msg_id=ev.reply_to_msg_id,
+                                         reaction=[ReactionEmoji(emoticon=e) for e in emos]))
+    except errors.ReactionInvalidError:
+        return "❌ یکی از ایموجی‌ها به‌عنوان ریاکشن مجاز نیست."
+    except errors.FloodWaitError as e:
+        return f"⏳ تلگرام محدود کرد؛ {e.seconds} ثانیه صبر کن."
     except Exception as e:  # noqa: BLE001
-        err = str(e)[:80]
-    finally:
-        _react_busy.discard(uid)
-    await _say(uid, ev, f"{emo} {done} ریاکشن زده شد" + (f"\n⚠️ {err}" if err else ""))
+        logger.info("self react %s: %s", uid, e)
+        return "⚠️ ارسال نشد: " + str(e)[:120]
+    try:
+        await ev.delete()      # پیام دستور پاک می‌شه
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _u16(t):
@@ -1076,6 +1054,8 @@ async def _find_chat(client, name):
 
 async def _handle_dot(uid, ev):
     raw = ev.raw_text or ""
+    if raw.strip() == "پنل":
+        raw = ".پنل"
     if not raw.lstrip().startswith((".", "/")):
         return False
     pc = parse_dot(raw)
@@ -1090,6 +1070,8 @@ async def _handle_dot(uid, ev):
     _cmd_hist[uid] = h
     try:
         if cmd == "panel":
+            if await send_inline_panel(uid, ev):
+                return True
             if ev.chat_id == uid:      # Saved Messages: پنل همون‌جا بالا میاد
                 await ev.edit(_panel_text(uid), parse_mode=None)
             else:                      # گپ عمومی: پیام دستور پاک می‌شه و پنل می‌ره توی چت ربات
@@ -1637,6 +1619,172 @@ async def on_contact(update, context):
     raise ApplicationHandlerStop
 
 
+
+
+# ---------- پنل اینلاین (وقتی «پنل» یا .پنل می‌نویسی، پیامت به پنل تصویری ربات تبدیل می‌شه) ----------
+# نیازمند: توی BotFather برای ربات /setinline بزن (Inline mode روشن باشه).
+# اختیاری: SELF_BANNER_URL = آدرس https عکس بنر؛ بدون اون یه بنر خودکار ساخته می‌شه.
+_banner = {"file_id": None}
+_panel_msg = {}     # uid -> (chat_id, message_id) آخرین پنلی که فرستاده شده
+
+CMDS_TEXT = (
+    "› دستورات سلف\n\n"
+    "پنل  ← همین پنل\n"
+    ".کلمه فلان  ← کلمه‌ی اسلات\n"
+    ".زمان 10s  ← تایمر\n"
+    ".دکمه چپ | وسط | راست | خالی\n"
+    ".گپ  ← همین گپ (یا .گپ اسم گروه)\n"
+    ".ساعت  ← ساعت زنده کنار اسم\n"
+    ".کپی  ← (ریپلای) کپی پروفایل | .غیرفعال کپی\n"
+    ".ایموجی متن  ← ایموجی پریمیوم\n"
+    ".ریاکشن 🔥❤👍  ← (ریپلای) تا ۳ ریاکشن روی همون پیام"
+)
+
+
+def _make_banner():
+    import io
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 1280, 360
+    img = Image.new("RGB", (W, H))
+    px = img.load()
+    for x in range(W):
+        for y in range(H):
+            t = x / W
+            px[x, y] = (int(18 + 70 * t), int(6 + 14 * t), int(48 + 120 * t * (1 - 0.35 * y / H)))
+    d = ImageDraw.Draw(img)
+    d.ellipse((50, 50, 310, 310), outline=(190, 150, 255), width=8)
+    d.ellipse((72, 72, 288, 288), fill=(245, 242, 255))
+    try:
+        big, mid, small = (ImageFont.load_default(size=n) for n in (110, 46, 34))
+    except Exception:  # noqa: BLE001
+        big = mid = small = ImageFont.load_default()
+    d.text((180, 180), "S", font=big, fill=(70, 30, 150), anchor="mm")
+    d.line((360, 70, 360, 290), fill=(190, 150, 255), width=4)
+    d.text((400, 130), "SELF PANEL", font=big, fill=(255, 255, 255), anchor="lm")
+    d.text((404, 235), "fast   -   simple   -   private", font=mid, fill=(205, 185, 255), anchor="lm")
+    d.rectangle((0, H - 10, W, H), fill=(150, 90, 255))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    buf.seek(0)
+    return buf
+
+
+async def prepare_banner(app):
+    """بنر رو یه بار می‌سازه و با آپلود به ادمین، file_id می‌گیره (پیام بعدش پاک می‌شه)."""
+    if os.environ.get("SELF_BANNER_URL", "").strip() or not ADMIN_IDS:
+        return
+    try:
+        m = await app.bot.send_photo(chat_id=min(ADMIN_IDS), photo=_make_banner(), disable_notification=True)
+        _banner["file_id"] = m.photo[-1].file_id
+        try:
+            await m.delete()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("self banner: %s", e)
+
+
+def _inl_caption(name):
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(CLOCK_TZ)).strftime("%H:%M")
+    except Exception:  # noqa: BLE001
+        now = datetime.now(timezone.utc).strftime("%H:%M")
+    return f"› Panel {name} {now}".replace("  ", " ")
+
+
+def _inl_kb():
+    uname = getattr(_botref[0], "username", "") if _botref[0] else ""
+    row = [B("دستورات سلف", callback_data="selfi:cmds", style="success")]
+    if uname:
+        row.insert(0, B("تنظیمات سلف", url=f"https://t.me/{uname}?start=panel", style="success"))
+    return KB([row, [B("بستن پنل", callback_data="selfi:close", style="danger")]])
+
+
+def _inl_back_kb():
+    return KB([[B("بازگشت", callback_data="selfi:home", style="primary")],
+               [B("بستن پنل", callback_data="selfi:close", style="danger")]])
+
+
+async def on_inline_query(update, context):
+    iq = update.inline_query
+    uid = iq.from_user.id
+    if not (_allowed(uid) or uid in ADMIN_IDS):
+        await iq.answer([], cache_time=0, is_personal=True)
+        return
+    cap = _inl_caption(iq.from_user.first_name or "")
+    kb = _inl_kb()
+    rid = f"panel{int(time.time())}"
+    url = os.environ.get("SELF_BANNER_URL", "").strip()
+    if url:
+        res = InlineQueryResultPhoto(id=rid, photo_url=url, thumbnail_url=url, caption=cap, reply_markup=kb)
+    elif _banner["file_id"]:
+        res = InlineQueryResultCachedPhoto(id=rid, photo_file_id=_banner["file_id"], caption=cap, reply_markup=kb)
+    else:
+        res = InlineQueryResultArticle(id=rid, title="Panel", input_message_content=InputTextMessageContent(cap), reply_markup=kb)
+    await iq.answer([res], cache_time=0, is_personal=True)
+
+
+async def _inl_edit(bot, imid, text, kb):
+    try:
+        await bot.edit_message_caption(inline_message_id=imid, caption=text, reply_markup=kb)
+    except Exception:  # noqa: BLE001
+        try:
+            await bot.edit_message_text(text, inline_message_id=imid, reply_markup=kb)
+        except Exception as e:  # noqa: BLE001
+            logger.info("self inline edit: %s", e)
+
+
+async def cb_inline(update, context):
+    q = update.callback_query
+    uid = q.from_user.id
+    if not _allowed(uid):
+        await q.answer("این پنل برای تو نیست.", show_alert=True)
+        return
+    await q.answer()
+    a = (q.data or "").split(":")[1]
+    imid = q.inline_message_id
+    if a == "close":
+        pm = _panel_msg.pop(uid, None)
+        client = _clients.get(uid)
+        if pm and client:
+            try:
+                await client.delete_messages(pm[0], [pm[1]])
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        if imid:
+            await _inl_edit(context.bot, imid, "پنل بسته شد.", None)
+    elif imid and a == "cmds":
+        await _inl_edit(context.bot, imid, CMDS_TEXT, _inl_back_kb())
+    elif imid and a == "home":
+        await _inl_edit(context.bot, imid, _inl_caption(q.from_user.first_name or ""), _inl_kb())
+
+
+async def send_inline_panel(uid, ev):
+    """پیام دستور رو پاک می‌کنه و پنل اینلاین ربات رو توی همون گپ می‌فرسته. اگه نشد False."""
+    client = _clients.get(uid)
+    bot = _botref[0]
+    uname = getattr(bot, "username", None) if bot else None
+    if not client or not uname:
+        return False
+    try:
+        res = await client.inline_query(uname, "panel", entity=ev.chat_id)
+        if not res:
+            return False
+        sent = await res[0].click(ev.chat_id, reply_to=ev.reply_to_msg_id if ev.is_reply else None)
+        if sent is not None:
+            _panel_msg[uid] = (ev.chat_id, sent.id)
+        try:
+            await ev.delete()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.info("self inline panel %s: %s", uid, e)
+        return False
+
+
 # ---------- پنل مدیر ----------
 ADMIN_IDS = set()
 
@@ -1724,6 +1872,8 @@ def register(app, admin_ids):
     ADMIN_IDS.clear()
     ADMIN_IDS.update(admin_ids)
     app.add_handler(CommandHandler("self", cmd_self), group=-5)
+    app.add_handler(InlineQueryHandler(on_inline_query), group=-5)
+    app.add_handler(CallbackQueryHandler(cb_inline, pattern=r"^selfi:"), group=-5)
     app.add_handler(CallbackQueryHandler(cb_user, pattern=r"^self:"), group=-5)
     app.add_handler(CallbackQueryHandler(cb_admin, pattern=r"^selfa:"), group=-5)
     app.add_handler(MessageHandler(filters.CONTACT & filters.ChatType.PRIVATE, on_contact), group=-5)

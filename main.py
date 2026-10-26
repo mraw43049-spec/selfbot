@@ -34,6 +34,9 @@ def _home_kb(uid):
 
 async def cmd_start(update, context):
     u = update.effective_user
+    if context.args and context.args[0] == "panel":
+        await selfbot.cmd_self(update, context)
+        return
     tx = ("🤖 به ربات سلف خوش اومدی.\n\n"
           "اگه مدیر برات فعالش کرده، /self رو بزن یا بنویس «سلف».")
     if u.id in ADMIN_IDS:
@@ -71,7 +74,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_back, pattern=r"^admin:back$"))
     selfbot.register(app, ADMIN_IDS)
     logger.info("selfbot standalone started")
-    app.run_polling(allowed_updates=["message", "callback_query"], drop_pending_updates=True)
+    app.run_polling(allowed_updates=["message", "callback_query", "inline_query"], drop_pending_updates=True)
 
 
 if __name__ == "__main__":
