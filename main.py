@@ -16,7 +16,6 @@ from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as KB
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 import selfbot
-import commerce
 from database import init_db
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s", level=logging.INFO)
@@ -70,7 +69,6 @@ def main():
         logger.warning("ADMIN_IDS خالیه؛ هیچ‌کس نمی‌تونه کاربر فعال کنه")
     init_db()
     app = Application.builder().token(TOKEN).post_init(post_init).build()
-    commerce.setup(app)
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(cb_back, pattern=r"^admin:back$"))
     selfbot.register(app, ADMIN_IDS)
