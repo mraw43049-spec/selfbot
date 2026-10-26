@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """منو، عضویت اجباری، الماس، دعوت، انتقال و رسید پرداخت."""
+import asyncio
 import os
 import re
 import secrets
@@ -40,9 +41,24 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False)
     plan = Column(String(20), nullable=False)
+    discount = Column(Integer, default=0)
+    code = Column(String(32), nullable=True)
     status = Column(String(20), default='pending')
     created = Column(Integer, default=lambda: int(time.time()))
 
+class DiscountCode(Base):
+    __tablename__ = 'discount_codes'
+    code = Column(String(32), primary_key=True)
+    percent = Column(Integer, nullable=False)
+    max_uses = Column(Integer, nullable=False, default=1)
+    used = Column(Integer, nullable=False, default=0)
+    expires = Column(Integer, nullable=True)
+    created = Column(Integer, default=lambda: int(time.time()))
+class DiscountUse(Base):
+    __tablename__ = 'discount_uses'
+    code = Column(String(32), primary_key=True)
+    user_id = Column(BigInteger, primary_key=True)
+    ts = Column(Integer, default=lambda: int(time.time()))
 class GiftCode(Base):
     __tablename__ = 'gift_codes'
     code = Column(String(32), primary_key=True)
@@ -71,6 +87,13 @@ def _migrate_wallet():
                 conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN trial_until INTEGER'))
             if 'trial_used' not in cols:
                 conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN trial_used BOOLEAN DEFAULT FALSE'))
+        if 'diamond_payments' in insp.get_table_names():
+            pcols = {c['name'] for c in insp.get_columns('diamond_payments')}
+            with __import__('database').engine.begin() as conn:
+                if 'discount' not in pcols:
+                    conn.execute(text('ALTER TABLE diamond_payments ADD COLUMN discount INTEGER DEFAULT 0'))
+                if 'code' not in pcols:
+                    conn.execute(text('ALTER TABLE diamond_payments ADD COLUMN code VARCHAR(32)'))
     except Exception:
         import logging; logging.getLogger(__name__).exception('wallet migration failed')
 
@@ -152,6 +175,161 @@ async def is_member(bot,uid):
         except Exception:
             return False
     return True
+PRICES = {'1': 75000, '2': 120000}
+DIAMONDS = {'1': 1000, '2': 1800}
+_warn_level = {}   # uid -> سطح هشدار کمبود الماس (۱: کمتر از ۲۴ ساعت، ۲: کمتر از ۳ ساعت)
+
+def money(n):
+    return f'{int(n):,}'.replace(',', '٬')
+
+def _pct(context):
+    d = context.user_data.get('disc')
+    return int(d['pct']) if d else 0
+
+def buy_text(pct=0):
+    def line(plan, label):
+        base = PRICES[plan]
+        if pct:
+            return f'{label} — {DIAMONDS[plan]} الماس — {money(base)} ← {money(base * (100 - pct) // 100)} تومان ({pct}٪ تخفیف 🏷)'
+        return f'{label} — {DIAMONDS[plan]} الماس — {money(base)} تومان'
+    return ('💎 خرید الماس\n\n' + line('1', '۱ ماه') + '\n' + line('2', '۲ ماه') + '\n\n'
+            + (f'🏷 کد تخفیف فعاله: {pct}٪\n\n' if pct else 'کد تخفیف داری؟ دکمهٔ «کد تخفیف» رو بزن.\n\n')
+            + f'شماره کارت: {CARD}\nبه نام: {OWNER}\nبعد از واریز، رسید رو همین‌جا ارسال کن؛ رسید و توضیحات برای پشتیبانی فرستاده می‌شه.')
+
+def buy_kb():
+    return KB([[B('خرید ۱ ماهه',callback_data='shop:pay:1')],[B('خرید ۲ ماهه',callback_data='shop:pay:2')],[B('کد تخفیف',callback_data='shop:disc')],[B('منوی اصلی',callback_data='shop:home')]])
+
+def make_discount(percent, max_uses, hours=None):
+    s = get_session()
+    try:
+        for _ in range(10):
+            code = 'OFF-' + ''.join(secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(6))
+            if not s.get(DiscountCode, code):
+                break
+        exp = int(time.time()) + int(hours) * 3600 if hours else None
+        s.add(DiscountCode(code=code, percent=int(percent), max_uses=int(max_uses), used=0, expires=exp))
+        s.commit()
+        return code
+    finally:
+        s.close()
+
+def check_discount(uid, code):
+    """('ok', درصد) یا (علت, None)."""
+    code = (code or '').strip().upper()
+    s = get_session()
+    try:
+        d = s.get(DiscountCode, code)
+        if not d:
+            return ('invalid', None)
+        if d.expires and int(time.time()) > d.expires:
+            return ('expired', None)
+        if (d.used or 0) >= d.max_uses:
+            return ('finished', None)
+        if s.get(DiscountUse, (code, uid)):
+            return ('already', None)
+        return ('ok', int(d.percent))
+    finally:
+        s.close()
+
+def consume_discount(uid, code):
+    """ثبت مصرف کد هنگام ارسال رسید؛ درصد یا ۰ برمی‌گردونه."""
+    code = (code or '').strip().upper()
+    s = get_session()
+    try:
+        d = s.query(DiscountCode).filter(DiscountCode.code == code).with_for_update().one_or_none()
+        if (not d or (d.expires and int(time.time()) > d.expires) or (d.used or 0) >= d.max_uses
+                or s.get(DiscountUse, (code, uid))):
+            return 0
+        d.used = (d.used or 0) + 1
+        s.add(DiscountUse(code=code, user_id=uid))
+        s.commit()
+        return int(d.percent)
+    except Exception:
+        s.rollback()
+        return 0
+    finally:
+        s.close()
+
+def release_discount(uid, code):
+    if not code:
+        return
+    s = get_session()
+    try:
+        d = s.get(DiscountCode, code)
+        u = s.get(DiscountUse, (code, uid))
+        if d and u:
+            d.used = max(0, (d.used or 0) - 1)
+            s.delete(u)
+            s.commit()
+    except Exception:
+        s.rollback()
+    finally:
+        s.close()
+
+def stats_text():
+    import json as _json
+    s = get_session()
+    try:
+        users = s.query(Wallet).count()
+        bal = sum((Decimal(w.balance or 0) for w in s.query(Wallet).all()), Decimal('0'))
+        started = s.query(Wallet).filter(Wallet.self_started.is_(True)).count()
+        pays = s.query(Payment).all()
+        ok = [p for p in pays if p.status == 'approved']
+        pend = len([p for p in pays if p.status == 'pending'])
+        rev = sum(PRICES.get(p.plan, 0) * (100 - int(p.discount or 0)) // 100 for p in ok)
+        sold = sum(DIAMONDS.get(p.plan, 0) for p in ok)
+        enabled = s.query(selfbot.SelfAccess).filter(selfbot.SelfAccess.enabled.is_(True)).count()
+        gifts = s.query(GiftRedeem).count()
+        disc_used = s.query(DiscountUse).count()
+        labels = {'always_online': 'همیشه آنلاین', 'typing_mode': 'تایپینگ', 'clock_on': 'ساعت زنده', 'ar_on': 'پاسخ خودکار',
+                  'del_on': 'حذف/ویرایش', 'ttl_on': 'مدیای تایمردار', 'mn_on': 'منشن‌گیر', 'wl_on': 'ناظر'}
+        cnt = {k: 0 for k in labels}
+        for r in s.query(selfbot.SelfProfile).all():
+            try:
+                d = _json.loads(r.data or '{}')
+            except Exception:
+                continue
+            for k in labels:
+                if d.get(k):
+                    cnt[k] += 1
+        slot_users = 0
+        for r in s.query(selfbot.SelfAccess).all():
+            if any(x.get('word') for x in selfbot.slots_of(r)):
+                slot_users += 1
+        cnt_txt = '\n'.join(f'• {labels[k]}: {v}' for k, v in sorted(cnt.items(), key=lambda kv: -kv[1]))
+        return ('📊 آمار ربات\n\n'
+                f'👥 کاربران: {users}\n🔌 سلف روشن (خریداری‌شده): {started}\n✅ دسترسی فعال: {enabled}\n🟢 اتصال زنده الان: {len(selfbot._clients)}\n'
+                f'🎮 کاربران با اسلات بازی: {slot_users}\n\n'
+                f'💎 مجموع الماس موجود در حساب‌ها: {fmt_bal(bal)}\n'
+                f'💰 فروش تأییدشده: {len(ok)} پرداخت | {sold} الماس | {money(rev)} تومان\n⏳ رسید در انتظار: {pend}\n'
+                f'🎁 کد هدیه استفاده‌شده: {gifts} | 🏷 کد تخفیف استفاده‌شده: {disc_used}\n\n'
+                f'🔥 پرمصرف‌ترین قابلیت‌ها (تعداد کاربر روشن‌کننده):\n{cnt_txt}')
+    finally:
+        s.close()
+
+def broadcast_ids(audience):
+    s = get_session()
+    try:
+        if audience == 'self':
+            return [r.user_id for r in s.query(selfbot.SelfAccess).filter(selfbot.SelfAccess.enabled.is_(True)).all()]
+        return [w.user_id for w in s.query(Wallet).all()]
+    finally:
+        s.close()
+
+async def _broadcast(bot, admin_id, from_chat, msg_id, ids):
+    ok = fail = 0
+    for i in ids:
+        try:
+            await bot.copy_message(chat_id=i, from_chat_id=from_chat, message_id=msg_id)
+            ok += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.06)
+    try:
+        await bot.send_message(admin_id, f'📢 ارسال همگانی تموم شد.\n✅ موفق: {ok}\n❌ ناموفق (ربات رو بلاک کرده یا دسترسی نیست): {fail}')
+    except Exception:
+        pass
+
 _CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 def make_gift(creator, amount, max_uses, hours=None):
@@ -304,10 +482,13 @@ async def callback(update,context):
     elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
-    elif data=='shop:buy': await show_panel(q, f'💎 خرید الماس\n\n۱ ماه — ۱۰۰۰ الماس — ۷۵٬۰۰۰ تومان\n۲ ماه — ۱۸۰۰ الماس — ۱۲۰٬۰۰۰ تومان\n\nشماره کارت: {CARD}\nبه نام: {OWNER}\nبعد از واریز، رسید رو همین‌جا ارسال کن؛ رسید و توضیحات برای پشتیبانی فرستاده می‌شه.',reply_markup=KB([[B('خرید ۱ ماهه',callback_data='shop:pay:1')],[B('خرید ۲ ماهه',callback_data='shop:pay:2')],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:buy': await show_panel(q, buy_text(_pct(context)), reply_markup=buy_kb())
+    elif data=='shop:disc':
+        context.user_data['gift_step']='disc'; await show_panel(q, '🏷 کد تخفیفت رو بفرست (مثل OFF-XXXXXX). برای لغو بنویس «لغو».')
     elif data.startswith('shop:pay:'):
         plan=data.rsplit(':',1)[1]; context.user_data['payment_plan']=plan
-        await show_panel(q, 'حالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
+        pct=_pct(context); final=PRICES.get(plan,0)*(100-pct)//100
+        await show_panel(q, f'💳 مبلغ قابل پرداخت: {money(final)} تومان'+(f' (با {pct}٪ تخفیف)' if pct else '')+f'\nشماره کارت: {CARD}\nبه نام: {OWNER}\n\nحالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
     elif data=='shop:invite':
         me=await context.bot.get_me(); link=f'https://t.me/{me.username}?start=ref{uid}'
         await show_panel(q, f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('منوی اصلی',callback_data='shop:home')]]))
@@ -355,6 +536,8 @@ async def payment_review(update, context):
         elif action == "reject":
             p.status = "rejected"
             s.commit()
+            try: release_discount(p.user_id, p.code)
+            except Exception: pass
             await context.bot.send_message(p.user_id, "درخواست خرید الماس رد شد. برای بررسی بیشتر با پشتیبانی تماس بگیر.")
             await q.edit_message_reply_markup(reply_markup=None)
             await q.message.reply_text(f"درخواست #{pid} رد شد.")
@@ -384,8 +567,40 @@ async def incoming(update,context):
         if t=='لغو':
             context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
         await _gift_create(m, context, t); return
+    gs=context.user_data.get('gift_step')
+    if gs=='disc_new' and u.id in selfbot.ADMIN_IDS and m.text:
+        t=m.text.strip()
+        if t=='لغو':
+            context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
+        parts=t.replace(',',' ').split()
+        try:
+            pc=int(parts[0]); uses=int(parts[1]) if len(parts)>1 else 1; hrs=int(parts[2]) if len(parts)>2 else None
+            if not 1<=pc<=90 or not 1<=uses<=10000: raise ValueError
+        except Exception:
+            await m.reply_text('فرمت درست نیست. مثال: 20 10  (۲۰٪ تخفیف، ۱۰ نفر) یا 20 10 72 (با اعتبار ۷۲ ساعته). برای لغو بنویس «لغو».'); return
+        code=make_discount(pc,uses,hrs); context.user_data.pop('gift_step',None)
+        await m.reply_text(f'🏷 کد تخفیف ساخته شد:\n\n{code}\n\n{pc}٪ تخفیف | 👥 {uses} بار استفاده'+(f' | ⏳ {hrs} ساعت' if hrs else '')+'\nکاربر از «خرید الماس» ← «کد تخفیف» واردش می‌کنه.'); return
+    if gs=='bc_wait' and u.id in selfbot.ADMIN_IDS:
+        if m.text and m.text.strip()=='لغو':
+            context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
+        context.user_data.pop('gift_step',None)
+        context.user_data['bc_msg']=(m.chat_id,m.message_id)
+        n_all=len(broadcast_ids('all')); n_self=len(broadcast_ids('self'))
+        await m.reply_text(f'👆 این پیام برای ارسال همگانی آماده‌ست. به کی بفرستم؟',reply_to_message_id=m.message_id,
+            reply_markup=KB([[B('ارسال به همه کاربران ('+str(n_all)+')',callback_data='adm:bcall')],[B('ارسال به کاربران سلف فعال ('+str(n_self)+')',callback_data='adm:bcself')],[B('لغو',callback_data='adm:bccancel')]])); return
     if not await is_member(context.bot,u.id):
         await m.reply_text('برای استفاده باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
+    if gs=='disc' and m.text:
+        t=m.text.strip()
+        if t=='لغو':
+            context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.',reply_markup=home_kb()); return
+        res,pc=check_discount(u.id,t)
+        if res=='ok':
+            context.user_data.pop('gift_step',None); context.user_data['disc']={'code':t.upper(),'pct':pc}
+            await m.reply_text(f'✅ کد تخفیف {pc}٪ اعمال شد!\n\n'+buy_text(pc),reply_markup=buy_kb()); return
+        msgs={'invalid':'❌ کد معتبر نیست؛ دوباره بفرست یا «لغو» بنویس.','expired':'⌛ این کد تخفیف منقضی شده.','finished':'😕 ظرفیت این کد تموم شده.','already':'ℹ️ این کد رو قبلاً استفاده کردی.'}
+        if res!='invalid': context.user_data.pop('gift_step',None)
+        await m.reply_text(msgs.get(res,'❌ کد معتبر نیست.')); return
     if context.user_data.get('gift_step')=='redeem' and m.text:
         t=m.text.strip()
         if t=='لغو':
@@ -406,14 +621,20 @@ async def incoming(update,context):
     if plan and (m.photo or m.document):
         s=get_session()
         try:
-            p=Payment(user_id=u.id,plan=plan,status='pending'); s.add(p); s.commit(); pid=p.id
+            dd=context.user_data.get('disc'); pct=0; dcode=None
+            if dd:
+                pct=consume_discount(u.id,dd['code'])
+                dcode=dd['code'] if pct else None
+                context.user_data.pop('disc',None)
+            p=Payment(user_id=u.id,plan=plan,status='pending',discount=pct,code=dcode); s.add(p); s.commit(); pid=p.id
         finally:s.close()
         context.user_data.pop('payment_plan',None)
+        final=PRICES.get(plan,0)*(100-pct)//100
         recipients=set(selfbot.ADMIN_IDS)
         recipients.add('@escotch')
         for admin in recipients:
             try:
-                await context.bot.send_message(admin,f'رسید خرید الماس\nکاربر: {u.id} (@{u.username or "ندارد"})\nپلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan=="1" else "۲ ماهه / ۱۸۰۰ الماس"}\nشناسه پیگیری: {pid}', reply_markup=KB([[btn('تأیید و واریز الماس', f'pay:approve:{pid}', style='success'), btn('رد درخواست', f'pay:reject:{pid}', style='danger')]]))
+                await context.bot.send_message(admin,f'رسید خرید الماس\nکاربر: {u.id} (@{u.username or "ندارد"})\nپلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan=="1" else "۲ ماهه / ۱۸۰۰ الماس"}\n💳 مبلغ باید پرداخت‌شده باشد: {money(final)} تومان'+(f' (با کد {dcode} — {pct}٪ تخفیف)' if pct else '')+f'\nشناسه پیگیری: {pid}', reply_markup=KB([[btn('تأیید و واریز الماس', f'pay:approve:{pid}', style='success'), btn('رد درخواست', f'pay:reject:{pid}', style='danger')]]))
                 if m.photo: await context.bot.send_photo(admin,m.photo[-1].file_id,caption=f'رسید کاربر {u.id} | پرداخت #{pid}')
                 elif m.document: await context.bot.send_document(admin,m.document.file_id,caption=f'رسید کاربر {u.id} | پرداخت #{pid}')
             except Exception: pass
@@ -495,6 +716,14 @@ async def charge_job(context):
             elif cost>0:
                 try: context.application.create_task(context.bot.send_message(w.user_id,f'💎 هزینه‌ی {hours} ساعت: {cost} الماس. موجودی فعلی: {w.balance}'))
                 except Exception: pass
+            if w.self_started and Decimal(w.balance or 0)>0:
+                left=Decimal(w.balance)/Decimal('2.0')
+                lvl=2 if left<3 else 1 if left<24 else 0
+                if lvl==0: _warn_level.pop(w.user_id,None)
+                elif lvl>_warn_level.get(w.user_id,0):
+                    _warn_level[w.user_id]=lvl
+                    try: context.application.create_task(context.bot.send_message(w.user_id,f'⚠️ الماست داره تموم می‌شه!\n💎 موجودی: {fmt_bal(w.balance)} الماس — سلفت حدود {int(left)} ساعت دیگه کار می‌کنه و بعدش خودکار خاموش می‌شه.\nبرای جلوگیری از قطع شدن، شارژ کن 👇',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('دعوت دوستان (۵۰ الماس)',callback_data='shop:invite')]])))
+                    except Exception: pass
         s.commit()
     finally:s.close()
 
@@ -526,6 +755,38 @@ async def gift_cb(update, context):
         finally:
             s.close()
         await q.message.reply_text('🎟 آخرین کدهای هدیه (کد | الماس | استفاده):\n\n'+('\n'.join(lines) if lines else 'هنوز کدی ساخته نشده.'))
+
+async def adm_cb(update, context):
+    q=update.callback_query
+    if q.from_user.id not in selfbot.ADMIN_IDS:
+        await q.answer('دسترسی نداری.', show_alert=True); return
+    await q.answer()
+    act=(q.data or '').split(':')[1]
+    if act=='stats':
+        await q.message.reply_text(stats_text())
+    elif act=='bc':
+        context.user_data['gift_step']='bc_wait'
+        await q.message.reply_text('📢 اطلاعیهٔ همگانی\n\nپیامت رو بفرست (متن، عکس، فایل… هرچی؛ همون‌طور که هست برای کاربران کپی می‌شه). برای لغو بنویس «لغو».')
+    elif act in ('bcall','bcself'):
+        ref=context.user_data.pop('bc_msg',None)
+        if not ref:
+            await q.message.reply_text('پیامی برای ارسال نیست؛ دوباره از منوی ادمین شروع کن.'); return
+        ids=broadcast_ids('all' if act=='bcall' else 'self')
+        await q.message.reply_text(f'⏳ ارسال برای {len(ids)} نفر شروع شد؛ بعد از پایان گزارش می‌فرستم.')
+        context.application.create_task(_broadcast(context.bot,q.from_user.id,ref[0],ref[1],ids))
+    elif act=='bccancel':
+        context.user_data.pop('bc_msg',None); await q.message.reply_text('ارسال همگانی لغو شد.')
+    elif act=='dnew':
+        context.user_data['gift_step']='disc_new'
+        await q.message.reply_text('🏷 ساخت کد تخفیف\n\nدرصد و تعداد دفعات استفاده رو بفرست:\n20 10  ← ۲۰٪ تخفیف برای ۱۰ نفر\n20 10 72  ← با اعتبار ۷۲ ساعته\nبرای لغو بنویس «لغو».')
+    elif act=='dlist':
+        s=get_session()
+        try:
+            rows=s.query(DiscountCode).order_by(DiscountCode.created.desc()).limit(15).all()
+            lines=[f'{d.code} | {d.percent}٪ | {d.used}/{d.max_uses}'+(' | ⌛' if d.expires and d.expires<int(time.time()) else '') for d in rows]
+        finally:
+            s.close()
+        await q.message.reply_text('🏷 آخرین کدهای تخفیف (کد | درصد | استفاده):\n\n'+('\n'.join(lines) if lines else 'هنوز کدی ساخته نشده.'))
 
 _BAL_RE = r'^\s*(موجودی|موجودی من|موجودی\s*من\s*چقدره|موجودیم)\s*[؟?!.]*\s*$'
 
@@ -566,6 +827,7 @@ def setup(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_BAL_RE), balance_cmd), group=-11)
     app.add_handler(CallbackQueryHandler(balance_cb, pattern=r'^bal:'), group=-11)
     app.add_handler(CallbackQueryHandler(gift_cb, pattern=r'^gift:'), group=-20)
+    app.add_handler(CallbackQueryHandler(adm_cb, pattern=r'^adm:'), group=-20)
     app.add_handler(CommandHandler('start',start),group=-10)
     app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject):'), group=-20)
     app.add_handler(CommandHandler('support', support_panel), group=-10)

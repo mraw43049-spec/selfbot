@@ -2203,6 +2203,10 @@ def admin_menu_kb():
                [B("📋 لیست کاربران سلف", callback_data="selfa:list")],
                [B("🎁 ساخت کد هدیه", callback_data="gift:new")],
                [B("🎟 کدهای هدیه", callback_data="gift:list")],
+               [B("🏷 ساخت کد تخفیف", callback_data="adm:dnew")],
+               [B("🏷 کدهای تخفیف", callback_data="adm:dlist")],
+               [B("📊 آمار ربات", callback_data="adm:stats")],
+               [B("📢 اطلاعیهٔ همگانی", callback_data="adm:bc")],
                [B("🔙 بازگشت", callback_data="admin:back")]])
 
 
