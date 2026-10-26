@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+"""دیتابیس مستقل پروژه‌ی سلف (فقط جدول‌های self_access و self_profile)."""
 import logging
 import os
 
@@ -15,15 +16,15 @@ if DATABASE_URL.startswith("postgresql://"):
         import psycopg  # noqa: F401
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     except ImportError:
-        logger.error("psycopg نصب نیست؛ برگشت به SQLite محلی")
+        logger.error("psycopg نصب نیست؛ برگشت به SQLite محلی (با هر دیپلوی پاک می‌شه)")
         DATABASE_URL = "sqlite:///self.db"
 
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=0 if _is_sqlite else 10,
+    pool_size=5 if not _is_sqlite else 5,
+    max_overflow=10 if not _is_sqlite else 0,
     pool_recycle=1800,
     connect_args={"check_same_thread": False} if _is_sqlite else {},
 )
@@ -32,7 +33,7 @@ Base = declarative_base()
 
 
 def init_db():
-    import selfbot  # noqa: F401
+    import selfbot  # noqa: F401  (جدول‌ها موقع import روی Base ثبت می‌شن)
     Base.metadata.create_all(engine)
 
 

@@ -30,10 +30,46 @@ import time
 from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, String, Text
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as KB, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import InlineKeyboardButton as _IKB, InlineKeyboardMarkup as KB, KeyboardButton as _KB, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from database import Base, get_session
+
+
+# ---------- دکمه‌های رنگی (بدون ایموجی) ----------
+# Bot API 9.4: style = primary (آبی) | success (سبز) | danger (قرمز). روی تلگرام قدیمی بدون رنگ دیده می‌شه.
+_EMO = re.compile("[\U0001F000-\U0001FFFF\u2190-\u21FF\u2300-\u23FF\u25A0-\u25FF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]")
+_BTN_MAP = {"⌫": "حذف", "◀️": "قبلی", "▶️": "بعدی", "🔙": "بازگشت", "✔️ ": "» "}
+
+
+def _clean(t):
+    t = t or ""
+    if t in _BTN_MAP:
+        return _BTN_MAP[t]
+    t = t.replace("✔️ ", "» ")
+    t = _EMO.sub("", t)
+    return re.sub(r"\s+", " ", t).strip() or "•"
+
+
+def _style_for(text, cd):
+    cd = cd or ""
+    t = text or ""
+    if cd in ("self:disc", "self:kc", "selfa:off", "selfa:del", "self:discy") or cd.startswith("self:d:") \
+            or any(w in t for w in ("لغو", "انصراف", "قطع", "توقف", "خاموش", "حذف")) and cd != "self:kx":
+        return "danger"
+    if cd in ("self:ky", "self:conn", "selfa:on", "self:tog", "self:clkt") or any(w in t for w in ("فعال", "روشن", "تأیید", "اتصال")):
+        return "success"
+    return "primary"
+
+
+def B(text, callback_data=None, **kw):
+    txt = _clean(text)
+    return _IKB(txt, callback_data=callback_data, api_kwargs={"style": _style_for(text, callback_data)}, **kw)
+
+
+def KeyboardButton(text, **kw):
+    return _KB(_clean(text), api_kwargs={"style": "danger" if "لغو" in text else "primary"}, **kw)
+
 
 logger = logging.getLogger(__name__)
 
@@ -1122,7 +1158,7 @@ def _panel(uid):
         else:
             t = f"{i + 1}️⃣ ➕ تنظیم کلمه"
         kb.append([B(t[:60], callback_data=f"self:s:{i}")])
-    kb.append([B("🕒 ساعت" + (" ✅" if _pget(uid).get("clock_on") else ""), callback_data="self:clk")])
+    kb.append([B("ساعت" + (" (روشن)" if _pget(uid).get("clock_on") else ""), callback_data="self:clk")])
     kb.append([B("🔌 قطع اتصال" if on else "🔗 اتصال اکانت", callback_data="self:disc" if on else "self:conn")])
     kb.append([B("▶️ فعال‌سازی" if row.paused else "⏸ توقف موقت", callback_data="self:tog")])
     return "\n".join(lines), KB(kb)
@@ -1279,7 +1315,7 @@ async def cb_user(update, context):
         dl = ud["self_dl"]
         per = 8
         pg = max(0, min(pg, max(0, (len(dl) - 1) // per)))
-        kb = [[B(("👥 " if g else "🤖 ") + n[:28], callback_data=f"self:cs:{i}:{pg * per + k}")] for k, (cid, n, g) in enumerate(dl[pg * per:(pg + 1) * per])]
+        kb = [[B(("گروه | " if g else "ربات | ") + n[:28], callback_data=f"self:cs:{i}:{pg * per + k}")] for k, (cid, n, g) in enumerate(dl[pg * per:(pg + 1) * per])]
         nav = []
         if pg > 0:
             nav.append(B("◀️", callback_data=f"self:cp:{i}:{pg}"))

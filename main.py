@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+"""ربات مستقل سلف روباهیو — polling، بدون وابستگی به ربات اصلی.
+
+متغیرهای Railway:
+  BOT_TOKEN      توکن ربات جدید (از @BotFather)
+  ADMIN_IDS      آیدی عددی مدیرها، با کاما (مثلاً 123,456)
+  SELF_API_ID    از my.telegram.org
+  SELF_API_HASH  از my.telegram.org
+  SELF_KEY       یه رشته‌ی تصادفی بلند برای رمزنگاری سشن‌ها (بعداً عوضش نکن!)
+  DATABASE_URL   (اختیاری) Postgres جدا؛ بدون اون SQLite محلی که با دیپلوی پاک می‌شه
+"""
 import logging
 import os
 
@@ -18,7 +28,7 @@ ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").sp
 def _home_kb(uid):
     rows = []
     if uid in ADMIN_IDS:
-        rows.append([B("🛠 مدیریت سلف", callback_data="selfa:menu")])
+        rows.append([B("مدیریت سلف", callback_data="selfa:menu", api_kwargs={"style": "primary"})])
     return KB(rows) if rows else None
 
 
@@ -52,6 +62,8 @@ async def post_init(app):
 def main():
     if not TOKEN:
         raise SystemExit("BOT_TOKEN تنظیم نشده")
+    if not ADMIN_IDS:
+        logger.warning("ADMIN_IDS خالیه؛ هیچ‌کس نمی‌تونه کاربر فعال کنه")
     init_db()
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
