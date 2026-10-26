@@ -1143,8 +1143,7 @@ async def _handle_dot(uid, ev):
                     await ev.delete()
                 except Exception:
                     pass
-                tx, kb = _panel(uid)
-                await _botref[0].send_message(uid, _panel_text(uid), reply_markup=kb)
+                await send_panel(_botref[0], uid)
             return True
         if cmd == "off":
             what = norm(re.sub(r"^فعال\s*", "", arg or ""))
@@ -1355,29 +1354,40 @@ async def _translate_text(text):
     return await asyncio.to_thread(_get)
 
 # ---------- پنل کاربر ----------
-def _panel(uid):
-    row = get_row(uid)
-    sl = slots_of(row)
-    on = uid in _clients
-    lines = ["🤖 <b>سلف روبی</b>\n",
-             f"🔌 اتصال: {'✅ وصل' if on else '❌ قطع'}",
-             f"⚙️ وضعیت: {'⏸ متوقف' if row.paused else '▶️ فعال'}\n",
-             "هر اسلات: کلمه رو هر چند ثانیه (تایمر) خودش توی گپ انتخابی می‌گه و بعدش دکمه‌ی انتخابی (چپ/وسط/راست) رو می‌زنه؛ لازم نیست چیزی بفرستی.",
-             "<b>تمام تنظیمات کلمه، زمان، دکمه و گپ فقط از همین پنل انجام می‌شود.</b> برای باز کردن پنل بنویس <code>.پنل</code>.\n",
-             "🕒 ساعت زنده کنار اسم: دکمه‌ی «ساعت» یا <code>.ساعت</code> — 🪞 کپی پروفایل: روی پیام کاربر ریپلای کن <code>.کپی</code> و برای برگشت <code>.غیرفعال کپی</code>\n"]
-    kb = []
-    for i in range(MAX_SLOTS):
-        s = sl[i] if i < len(sl) else None
-        if s and s.get("word"):
-            t = f"{i + 1}️⃣ «{s['word']}» {(s.get('title') or '💬؟')[:12]} {POS[s.get('pos', 'n')]}"
-        else:
-            t = f"{i + 1}️⃣ ➕ تنظیم کلمه"
-        kb.append([B(t[:60], callback_data=f"self:s:{i}")])
-    kb.append([B("ساعت" + (" (روشن)" if _pget(uid).get("clock_on") else ""), callback_data="self:clk")])
-    kb.append([B("امکانات تکمیلی", callback_data="self:features")])
-    kb.append([B("🔌 قطع اتصال" if on else "🔗 اتصال اکانت", callback_data="self:disc" if on else "self:conn")])
-    kb.append([B("▶️ فعال‌سازی" if row.paused else "⏸ توقف موقت", callback_data="self:tog")])
-    return "\n".join(lines), KB(kb)
+def _panel(uid, name=""):
+    """همون پنل اصلی (.پنل): کپشن کوتاه + دکمه‌ها؛ بدون متن توضیحی بلند."""
+    return _inl_caption(name), _inl_kb(uid, private=True)
+
+
+async def send_panel(bot, uid, name=""):
+    """پنل اصلی رو با بنر (اگه باشه) توی چت ربات می‌فرسته."""
+    cap, kb = _panel(uid, name)
+    url = os.environ.get("SELF_BANNER_URL", "").strip()
+    photo = url or _banner.get("file_id")
+    if photo:
+        try:
+            return await bot.send_photo(uid, photo=photo, caption=cap[:1024], reply_markup=kb)
+        except Exception as e:  # noqa: BLE001
+            logger.info("send_panel photo: %s", e)
+    return await bot.send_message(uid, cap, reply_markup=kb)
+
+
+class _PhotoMsg:
+    """جای q.message وقتی پنل به‌صورت عکس (بنر) فرستاده شده؛ ویرایش از طریق کپشن."""
+    is_inline = False
+
+    def __init__(self, msg):
+        self.m = msg
+
+    async def edit_text(self, text, reply_markup=None, parse_mode=None, **kw):
+        try:
+            await self.m.edit_caption(caption=text[:1024], reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception as e:  # noqa: BLE001
+            if "not modified" not in str(e).lower():
+                logger.info("photo panel edit: %s", e)
+
+    async def reply_text(self, text, **kw):
+        return await self.m.reply_text(text, **kw)
 
 
 def _slot_panel(uid, i):
@@ -1419,8 +1429,7 @@ async def cmd_self(update, context):
         return
     if not _allowed(u.id):
         raise ApplicationHandlerStop   # برای کسی که سلف نداره هیچ پیامی نمی‌آد
-    t, kb = _panel(u.id)
-    await update.effective_message.reply_text(t, reply_markup=kb, parse_mode="HTML")
+    await send_panel(context.bot, u.id, u.first_name or "")
 
 
 async def cb_user(update, context):
@@ -1433,6 +1442,8 @@ async def cb_user(update, context):
     a = p[1]
     ud = context.user_data
     qm = q.message or _InlineMsg(context.bot, q.inline_message_id, uid)
+    if q.message is not None and getattr(q.message, "photo", None):
+        qm = _PhotoMsg(q.message)
     await q.answer()
     if not (a == "e" and p[3] == "word"):
         _capture.pop(uid, None)
@@ -1442,8 +1453,8 @@ async def cb_user(update, context):
         if getattr(qm, "is_inline", False):
             await _inl_edit(context.bot, qm.imid, _inl_caption(q.from_user.first_name or ""), _inl_kb(uid))
             return
-        t, kb = _panel(uid)
-        await qm.edit_text(t, reply_markup=kb, parse_mode="HTML")
+        t, kb = _panel(uid, q.from_user.first_name or "")
+        await qm.edit_text(t, reply_markup=kb)
 
     if a == "home":
         await home()
@@ -1461,8 +1472,7 @@ async def cb_user(update, context):
         t, kb = _games_panel(uid)
         await qm.edit_text(t, reply_markup=kb)
     elif a == "features":
-        tx, kb = _feature_panel(uid)
-        await qm.edit_text(tx, reply_markup=kb)
+        await home()
     elif a == "ft":
         key = p[2]
         d = _pget(uid)
@@ -1473,25 +1483,24 @@ async def cb_user(update, context):
             if key == "typing_mode" and d.get(key) and not d.get("typing_target_id"):
                 # با روشن‌کردن تایپینگ، انتخاب مقصد را مستقیم باز کن.
                 if uid not in _clients:
-                    await qm.edit_text("اول اکانتت را وصل کن.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+                    await qm.edit_text("اول اکانتت را وصل کن.", reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
                     return
                 try:
                     dialogs = await _dialogs(_clients[uid])
                     rows = [[B(name[:50], callback_data=f"self:typing_set:{cid}")] for cid, name, _ in dialogs[:35]]
-                    rows.append([B("بازگشت", callback_data="self:features")])
+                    rows.append([B("بازگشت", callback_data="self:home")])
                     await qm.edit_text("گپی را انتخاب کن که وضعیت تایپ در آن نمایش داده شود:", reply_markup=KB(rows))
                     return
                 except Exception:
                     pass
-        tx, kb = _feature_panel(uid)
-        await qm.edit_text(tx, reply_markup=kb)
+        await home()
     elif a == "typing_chats":
         if uid not in _clients:
-            await qm.edit_text("اول اکانتت را وصل کن.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+            await qm.edit_text("اول اکانتت را وصل کن.", reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
             return
         dialogs = await _dialogs(_clients[uid])
         rows = [[B(name[:50], callback_data=f"self:typing_set:{cid}")] for cid, name, _ in dialogs[:35]]
-        rows.append([B("بازگشت", callback_data="self:features")])
+        rows.append([B("بازگشت", callback_data="self:home")])
         await qm.edit_text("گپی را انتخاب کن که وضعیت تایپ در آن نمایش داده شود:", reply_markup=KB(rows))
     elif a == "typing_set":
         try:
@@ -1501,31 +1510,28 @@ async def cb_user(update, context):
             title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or getattr(entity, "username", None) or str(target_id)
             d = _pget(uid); d["typing_target_id"] = target_id; d["typing_target_name"] = str(title)[:70]; d["typing_mode"] = True; _pput(uid, d)
             _sync_presence(uid)
-            tx, kb = _feature_panel(uid)
-            await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
+            await home()
         except Exception as exc:
-            await qm.edit_text("انتخاب مقصد انجام نشد: " + str(exc)[:100], reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+            await qm.edit_text("انتخاب مقصد انجام نشد: " + str(exc)[:100], reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
     elif a == "typing_clear":
         d = _pget(uid); d.pop("typing_target_id", None); d.pop("typing_target_name", None); _pput(uid, d)
         _sync_presence(uid)
-        tx, kb = _feature_panel(uid)
-        await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
+        await home()
     elif a == "fonts":
         d = _pget(uid)
         current = d.get("font_mode", "ساده")
         rows = [[B(name + (" (انتخاب‌شده)" if name == current else ""), callback_data="self:font:" + name)] for name in _FONT_MAPS]
-        rows.append([B("بازگشت", callback_data="self:features")])
+        rows.append([B("بازگشت", callback_data="self:home")])
         await qm.edit_text("فونت پیام‌های بعدی را انتخاب کن:", reply_markup=KB(rows))
     elif a == "font":
         name = ":".join(p[2:])
         if name in _FONT_MAPS:
             d = _pget(uid); d["font_mode"] = name; _pput(uid, d)
-        tx, kb = _feature_panel(uid)
-        await qm.edit_text(tx, reply_markup=kb)
+        await home()
     elif a == "translate_help":
-        await qm.edit_text("برای ترجمه، در اکانت متصل روی پیام متنی ریپلای کن و بنویس .ترجمه\nترجمه به فارسی انجام می‌شود و به اینترنت سرور نیاز دارد.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+        await qm.edit_text("برای ترجمه، در اکانت متصل روی پیام متنی ریپلای کن و بنویس .ترجمه\nترجمه به فارسی انجام می‌شود و به اینترنت سرور نیاز دارد.", reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
     elif a == "tag_help":
-        await qm.edit_text("برای تگ محدود اعضا در گروه بنویس .تگ اعضا\nبرای جلوگیری از اسپم، در هر اجرا حداکثر ۱۰ عضو منشن می‌شوند. ممکن است تلگرام دسترسی یا اطلاعات بعضی اعضا را محدود کند.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+        await qm.edit_text("برای تگ محدود اعضا در گروه بنویس .تگ اعضا\nبرای جلوگیری از اسپم، در هر اجرا حداکثر ۱۰ عضو منشن می‌شوند. ممکن است تلگرام دسترسی یا اطلاعات بعضی اعضا را محدود کند.", reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
     elif a == "clk":
         tx, kb = _clock_panel(uid)
         await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
@@ -1751,9 +1757,9 @@ async def _sign_in(uid, context, code=None, password=None):
     ud.pop("self_st", None)
     ud.pop("self_code", None)
     ok = await start_client(uid)
-    tx, kb = _panel(uid)
-    await bot.send_message(uid, ("✅ اکانت وصل شد!\n\n" if ok else "⚠️ ذخیره شد ولی اتصال بالا نیومد.\n\n") + tx,
-                           reply_markup=kb, parse_mode="HTML")
+    if not ok:
+        await bot.send_message(uid, "⚠️ ذخیره شد ولی اتصال بالا نیومد.")
+    await send_panel(bot, uid)
 
 
 async def user_text(update, context):
@@ -1939,7 +1945,7 @@ def _inl_caption(name):
 _panel_ctx = {}     # uid -> {"chat":..., "reply": آیدی پیامی که پنل روش ریپلای شده}
 
 
-def _inl_kb(uid):
+def _inl_kb(uid, private=False):
     row = get_row(uid)
     clock = bool(_pget(uid).get("clock_on"))
     paused = bool(row and row.paused)
@@ -1950,9 +1956,27 @@ def _inl_kb(uid):
          B("کپی پروفایل", callback_data="selfi:copy", style="primary")],
         [B("فعال‌سازی" if paused else "توقف موقت", callback_data="self:tog", style="success" if paused else "danger")],
     ]
+    if private:
+        rows.pop(1)   # ریاکشن/کپی نیاز به ریپلای در چت دارند؛ در چت ربات نمایش داده نمی‌شوند
+    d = _pget(uid)
+    def _st(k): return "روشن" if d.get(k) else "خاموش"
+    def _sty(k): return "success" if d.get(k) else "primary"
+    rows.insert(2, [B("همیشه آنلاین: " + _st("always_online"), callback_data="self:ft:always_online", style=_sty("always_online")),
+                    B("تایپینگ: " + _st("typing_mode"), callback_data="self:ft:typing_mode", style=_sty("typing_mode"))])
+    tgt = d.get("typing_target_name")
+    trow = [B(("گپ تایپینگ: " + str(tgt)[:18]) if tgt else "انتخاب گپ تایپینگ", callback_data="self:typing_chats", style="primary")]
+    if tgt:
+        trow.append(B("حذف مقصد", callback_data="self:typing_clear", style="danger"))
+    rows.insert(3, trow)
+    rows.insert(4, [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts", style="primary")])
+    rows.insert(5, [B("راهنمای ترجمه", callback_data="self:translate_help", style="primary"),
+                    B("راهنمای تگ اعضا", callback_data="self:tag_help", style="primary")])
     last = [B("دستورات سلف", callback_data="selfi:cmds", style="primary")]
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
-    if uname:
+    if private:
+        rows.append([B("🔌 قطع اتصال" if uid in _clients else "🔗 اتصال اکانت",
+                       callback_data="self:disc" if uid in _clients else "self:conn", style="danger" if uid in _clients else "success")])
+    elif uname:
         last.insert(0, B("تنظیمات سلف", url=f"https://t.me/{uname}?start=panel", style="primary"))
     rows.append(last)
     rows.append([B("بستن پنل", callback_data="selfi:close", style="danger")])
@@ -2059,9 +2083,18 @@ async def cb_inline(update, context):
                 pass
         if imid:
             await _inl_edit(bot, imid, "پنل بسته شد.", None)
-    elif a == "cmds" and imid:
+        elif q.message:
+            try:
+                await q.message.delete()
+            except Exception:  # noqa: BLE001
+                pass
+    elif a == "cmds" and (imid or q.message):
         await q.answer()
-        await _inl_edit(bot, imid, CMDS_TEXT, _inl_back_kb())
+        if imid:
+            await _inl_edit(bot, imid, CMDS_TEXT, _inl_back_kb())
+        else:
+            tgt = _PhotoMsg(q.message) if getattr(q.message, "photo", None) else q.message
+            await tgt.edit_text(CMDS_TEXT, reply_markup=_inl_back_kb())
     elif a == "react" and imid:
         await q.answer()
         kb = KB([[B("قلب", callback_data="selfi:r:h", style="danger"), B("آتش", callback_data="selfi:r:f", style="danger"),
