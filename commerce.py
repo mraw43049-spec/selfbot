@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """منو، عضویت اجباری، الماس، دعوت، انتقال و رسید پرداخت."""
+import os
+import re
 import time
 from decimal import Decimal
 from sqlalchemy import Column, BigInteger, String, Numeric, Integer, Boolean, inspect, text
 from telegram import InlineKeyboardButton as _B, InlineKeyboardMarkup as KB
-from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 from database import Base, get_session
 import selfbot
 
@@ -12,8 +14,11 @@ CHANNELS = [('@selfsaz_iran', 'https://t.me/selfsaz_iran'), ('@fox_frenzy', 'htt
 SUPPORT = '@escotch'
 CARD = '6219 8618 5116 0068'
 OWNER = 'ظریفی'
+ACTIVATE_COST = 5
+# دورهٔ رایگان ۳ روزه به‌صورت پیش‌فرض خاموشه (بدون الماس سلف فعال نمی‌شه). برای روشن‌کردنش: SELF_TRIAL=1
+TRIAL_ENABLED = os.environ.get('SELF_TRIAL', '').strip().lower() in ('1', 'true', 'yes')
 
-_EMOJI_RE = __import__('re').compile(r"[\\U0001F000-\\U0001FFFF\\u2190-\\u21FF\\u2300-\\u23FF\\u2600-\\u27BF\\uFE0F\\u200d]")
+_EMOJI_RE = __import__('re').compile("[\U0001F000-\U0001FFFF\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\uFE0F\u200d]")
 def B(text, *args, **kwargs):
     text = _EMOJI_RE.sub("", text or "").strip()
     api = kwargs.pop("api_kwargs", {}) or {}
@@ -130,6 +135,36 @@ async def is_member(bot,uid):
         except Exception:
             return False
     return True
+def fmt_bal(x):
+    d = Decimal(x or 0).quantize(Decimal('0.1'))
+    t = format(d, 'f')
+    return t[:-2] if t.endswith('.0') else t
+
+def welcome_text(name, balance):
+    lines = [
+        f'سلام {name} 👋',
+        'به «سلف‌ساز روباهیو» خوش اومدی ⚡️',
+        '',
+        'اکانت تلگرام خودت رو تبدیل کن به یه دستیار خودکار و حرفه‌ای:',
+        '🤖 بازی‌ها رو خودش انجام می‌ده؛ کلمه می‌گه، تایمر می‌ذاره و دکمه می‌زنه',
+        '🕒 ساعت زنده کنار اسمت',
+        '🪞 کپی پروفایل فقط با یه ریپلای',
+        '🟢 همیشه آنلاین  •  ⌨️ تایپینگ  •  🔤 حالت متن  •  🌐 ترجمه  •  🏷 تگ اعضا',
+        '🎛 همه‌چیز از یه پنل شیک؛ کافیه توی هر چتی بنویسی «.پنل»',
+        '',
+        f'💎 سلف با الماس کار می‌کنه: فعال‌سازی {ACTIVATE_COST} الماس، بعدش ساعتی ۲ الماس (روشن) یا ۰٫۲ الماس (خاموش).',
+        '🔒 بدون الماس سلف فعال نمی‌شه.',
+        '',
+        f'💰 موجودی تو: {fmt_bal(balance)} الماس',
+    ]
+    if Decimal(balance or 0) < ACTIVATE_COST:
+        lines.append(f'⚠️ برای فعال‌سازی حداقل {ACTIVATE_COST} الماس لازمه؛ از «خرید الماس» شارژ کن یا دوستات رو دعوت کن (هر دعوت ۵۰ الماس برای هر دو نفر).')
+    else:
+        lines.append('✅ الماس کافی داری؛ «ساخت سلف» رو بزن و شروع کن.')
+    lines.append('')
+    lines.append('💬 فرستادن «موجودی» توی هر چت، موجودیت رو نشون می‌ده.')
+    return '\n'.join(lines)
+
 async def start(update,context):
     u=update.effective_user
     if context.args and context.args[0]=='panel':
@@ -141,7 +176,7 @@ async def start(update,context):
     wallet(u.id,ref)
     if not await is_member(context.bot,u.id):
         await update.effective_message.reply_text('برای استفاده از ربات، اول عضو هر دو کانال شو و بعد «عضو شدم» رو بزن.',reply_markup=join_kb()); return
-    until, trial_new = start_trial(u.id)
+    until, trial_new = start_trial(u.id) if TRIAL_ENABLED else (None, False)
     awarded = award_referral(u.id)
     if awarded:
         wref = wallet(u.id)['referrer']
@@ -151,8 +186,8 @@ async def start(update,context):
                 await context.bot.send_message(wref, f'{u.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
         except Exception:
             pass
-    trial_msg = '\nدورهٔ رایگان سلفت به مدت ۳ روز شروع شد.' if trial_new else ''
-    await update.effective_message.reply_text(f'سلام {u.first_name}\nبه سلف‌ساز خوش اومدی!{trial_msg}\n\nموجودی: {wallet(u.id)["balance"]} الماس',reply_markup=home_kb())
+    trial_msg = '\n🎁 دورهٔ رایگان سلفت به مدت ۳ روز شروع شد.' if trial_new else ''
+    await update.effective_message.reply_text(welcome_text(u.first_name or '', wallet(u.id)['balance']) + trial_msg, reply_markup=home_kb())
 async def show_panel(q, text, **kwargs):
     try:
         await q.edit_message_text(text, **kwargs)
@@ -163,7 +198,7 @@ async def callback(update,context):
     q=update.callback_query; uid=q.from_user.id; data=q.data or ''; await q.answer()
     if data=='shop:check':
         if not await is_member(context.bot,uid): await show_panel(q, 'هنوز عضویت هر دو کانال تأیید نشده؛ بعد از عضویت دوباره بزن.',reply_markup=join_kb()); return
-        until, trial_new = start_trial(uid)
+        until, trial_new = start_trial(uid) if TRIAL_ENABLED else (None, False)
         awarded = award_referral(uid)
         if awarded:
             wref = wallet(uid)['referrer']
@@ -173,19 +208,20 @@ async def callback(update,context):
                     await context.bot.send_message(wref, f'{q.from_user.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
             except Exception:
                 pass
-        note = ' دورهٔ رایگان ۳ روزه شروع شد.' if trial_new else ''
-        await show_panel(q, 'عضویت تأیید شد.' + note + ' از منوی زیر استفاده کن.',reply_markup=home_kb()); return
+        note = '\n🎁 دورهٔ رایگان ۳ روزه شروع شد.' if trial_new else ''
+        await show_panel(q, '✅ عضویتت تأیید شد!\n\n' + welcome_text(q.from_user.first_name or '', wallet(uid)['balance']) + note,reply_markup=home_kb()); return
     if not await is_member(context.bot,uid):
         await show_panel(q, 'برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
     w=wallet(uid)
     if data=='shop:home': await show_panel(q, 'منوی اصلی',reply_markup=home_kb())
     elif data=='shop:create':
-        await show_panel(q, f'💎 موجودی فعلی: {w["balance"]}\nهر بار روشن‌کردن: ۵ الماس\nهزینه‌ی ساعتی در حالت روشن: ۲ الماس؛ در حالت خاموش: ۰٫۲ الماس.',reply_markup=KB([[B('▶️ روشن کردن',callback_data='shop:on')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
+        await show_panel(q, ('⚠️ الماس کافی نداری؛ بدون الماس سلف فعال نمی‌شه. اول از «خرید الماس» شارژ کن.\n\n' if w['balance'] < ACTIVATE_COST and not (w.get('trial_until') and int(w['trial_until']) > int(time.time())) else '') + f'💎 موجودی فعلی: {w["balance"]}\nهر بار روشن‌کردن: ۵ الماس\nهزینه‌ی ساعتی در حالت روشن: ۲ الماس؛ در حالت خاموش: ۰٫۲ الماس.',reply_markup=KB([[B('▶️ روشن کردن',callback_data='shop:on')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:on':
         if w['self_started']:
             await show_panel(q, 'سلفت از قبل روشنه. برای دیدن تنظیمات، دکمه‌ی اتصال اکانت یا دستور «پنل» رو استفاده کن.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('منوی اصلی',callback_data='shop:home')]])); return
         trial_active = bool(w.get('trial_until') and int(w['trial_until']) > int(time.time()))
-        if w['balance'] < 5 and not trial_active: await show_panel(q, 'حداقل ۵ الماس لازم داری. دورهٔ رایگان هم تمام شده؛ از بخش خرید الماس شارژ کن.',reply_markup=home_kb()); return
+        if w['balance'] < ACTIVATE_COST and not trial_active:
+            await show_panel(q, f'❌ الماس کافی نداری.\n\n💎 موجودی تو: {fmt_bal(w["balance"])} الماس\n🔒 برای فعال‌سازی سلف حداقل {ACTIVATE_COST} الماس لازمه.\nاز «خرید الماس» شارژ کن یا با دعوت دوستان الماس بگیر.',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('دعوت دوستان',callback_data='shop:invite')],[B('منوی اصلی',callback_data='shop:home')]])); return
         if not trial_active:
             change(uid,-5)
         s=get_session()
@@ -199,6 +235,7 @@ async def callback(update,context):
         s=get_session()
         try: x=s.get(Wallet,uid); x.self_started=False; x.last_charge=int(time.time()); s.commit()
         finally:s.close()
+        selfbot.save_row(uid, enabled=False)
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
         await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
     elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
@@ -363,6 +400,8 @@ async def charge_job(context):
             cost=rate*hours; w.balance=max(Decimal('0.0'),Decimal(w.balance or 0)-cost); w.last_charge=last+hours*3600
             if w.self_started and Decimal(w.balance)<=0:
                 w.self_started=False
+                try: selfbot.save_row(w.user_id, enabled=False)
+                except Exception: pass
                 try: context.application.create_task(selfbot.stop_client(w.user_id,restore=True))
                 except Exception: pass
                 try: context.application.create_task(context.bot.send_message(w.user_id,'⚠️ الماس‌هات تموم شد و سلف خاموش شد. برای ادامه الماس بخر.'))
@@ -372,9 +411,45 @@ async def charge_job(context):
                 except Exception: pass
         s.commit()
     finally:s.close()
+
+_BAL_RE = r'^\s*(موجودی|موجودی من|موجودی\s*من\s*چقدره|موجودیم)\s*[؟?!.]*\s*$'
+
+def _bal_kb(uid, balance):
+    return KB([[B('💎 ' + fmt_bal(balance) + ' الماس', callback_data=f'bal:{uid}')]])
+
+async def balance_cmd(update, context):
+    m = update.effective_message; u = update.effective_user
+    if not m or not u or not m.text:
+        return
+    bal = wallet(u.id)['balance']
+    try:
+        await m.reply_text('💰 موجودی شما', reply_markup=_bal_kb(u.id, bal), reply_to_message_id=m.message_id)
+    except Exception:
+        pass
+    if update.effective_chat.type == 'private':
+        raise ApplicationHandlerStop
+
+async def balance_cb(update, context):
+    q = update.callback_query
+    try:
+        owner = int((q.data or '').split(':')[1])
+    except Exception:
+        await q.answer(); return
+    if q.from_user.id != owner:
+        await q.answer('این دکمه برای تو نیست؛ خودت بنویس «موجودی».', show_alert=True); return
+    w = wallet(owner)
+    state = 'روشن ✅' if w['self_started'] else 'خاموش ⏹'
+    await q.answer(f'💎 موجودی شما: {fmt_bal(w["balance"])} الماس\n🔌 سلف: {state}', show_alert=True)
+    try:
+        await q.edit_message_reply_markup(reply_markup=_bal_kb(owner, w['balance']))
+    except Exception:
+        pass
+
 def setup(app):
     Base.metadata.create_all(__import__('database').engine)
     _migrate_wallet()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(_BAL_RE), balance_cmd), group=-11)
+    app.add_handler(CallbackQueryHandler(balance_cb, pattern=r'^bal:'), group=-11)
     app.add_handler(CommandHandler('start',start),group=-10)
     app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject):'), group=-20)
     app.add_handler(CommandHandler('support', support_panel), group=-10)
