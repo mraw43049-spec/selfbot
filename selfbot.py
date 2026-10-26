@@ -270,6 +270,18 @@ async def _on_out(uid, ev):
             return
     if await _handle_dot(uid, ev):
         return
+    # Apply selected Unicode font to ordinary text messages. Commands remain untouched.
+    dfont = _pget(uid)
+    mode = dfont.get("font_mode", "ساده")
+    fmap = _FONT_MAPS.get(mode)
+    original = (ev.raw_text or "")
+    if fmap and original and not original.lstrip().startswith((".", "/")) and not ev.media:
+        try:
+            changed = original.translate(fmap)
+            if changed != original:
+                await ev.edit(changed, parse_mode=None)
+        except Exception as e:
+            logger.debug("font transform skipped %s: %s", uid, e)
     if _paused.get(uid):
         return
     txt = norm(ev.raw_text or "")
@@ -919,6 +931,7 @@ async def emoji_send(uid, ev, arg):
 #   .گپ             → همین گپی که توش می‌نویسی؛ یا .گپ اسم گروه
 # بعد از تنظیم (کلمه + گپ + دکمه) سلف خودش کار می‌کنه.
 _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
+        "ترجمه": "translate", "translate": "translate", "تگ": "tag", "tag": "tag",
         "کلمه": "word", "word": "word",
         "زمان": "time", "تایمر": "time", "time": "time",
         "دکمه": "btn", "button": "btn",
@@ -1062,6 +1075,43 @@ async def _handle_dot(uid, ev):
     if not pc:
         return False
     cmd, arg = pc
+    if cmd == "translate":
+        if not ev.is_reply:
+            await _say(uid, ev, "روی متن موردنظر ریپلای کن و بعد .ترجمه را بفرست.")
+            return True
+        try:
+            reply = await ev.get_reply_message()
+            source = (reply.raw_text or "").strip()
+            if not source:
+                await _say(uid, ev, "پیام ریپلای‌شده متن قابل ترجمه ندارد.")
+            else:
+                result = await _translate_text(source)
+                await ev.reply("ترجمه:\n" + result, parse_mode=None)
+                try: await ev.delete()
+                except Exception: pass
+        except Exception as e:
+            await _say(uid, ev, "ترجمه انجام نشد؛ اتصال اینترنت سرور را بررسی کن. " + str(e)[:80])
+        return True
+    if cmd == "tag" and norm(arg) in ("اعضا", "members", "members all", "") :
+        try:
+            if not ev.is_group and not ev.is_channel:
+                await _say(uid, ev, "این دستور فقط در گروه قابل استفاده است.")
+                return True
+            from telethon.tl.types import User
+            mentions = []
+            async for participant in _clients[uid].iter_participants(ev.chat_id, limit=10):
+                if isinstance(participant, User) and not getattr(participant, "bot", False):
+                    label = (participant.first_name or "عضو").replace("[", "").replace("]", "")
+                    mentions.append(f"[{label}](tg://user?id={participant.id})")
+            if mentions:
+                await ev.reply("اعضای گروه (حداکثر ۱۰ نفر):\n" + " ".join(mentions), parse_mode="md")
+            else:
+                await _say(uid, ev, "عضوی برای منشن در دسترس نبود.")
+            try: await ev.delete()
+            except Exception: pass
+        except Exception as e:
+            await _say(uid, ev, "تگ اعضا انجام نشد؛ ممکن است تلگرام دسترسی اعضا را محدود کرده باشد. " + str(e)[:70])
+        return True
     now = time.time()
     h = [t for t in _cmd_hist.get(uid, []) if now - t < 60]
     if len(h) >= 40:
@@ -1194,6 +1244,38 @@ async def _handle_dot(uid, ev):
     return True
 
 
+# ---------- امکانات تکمیلی پنل ----------
+_FONT_MAPS = {
+    "ساده": None,
+    "بولد": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝗔𝗕𝗖𝗗𝗘𝗙𝗚𝗛𝗜𝗝𝗞𝗟𝗠𝗡𝗢𝗣𝗤𝗥𝗦𝗧𝗨𝗩𝗪𝗫𝗬𝗭𝗮𝗯𝗰𝗱𝗲𝗳𝗴𝗵𝗶𝗷𝗸𝗹𝗺𝗻𝗼𝗽𝗾𝗿𝘀𝘁𝘂𝘃𝘄𝘅𝘆𝘇"),
+    "ایتالیک": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝘈𝘉𝘊𝘋𝘌𝘍𝘎𝘏𝘐𝘑𝘒𝘓𝘔𝘕𝘖𝘗𝘘𝘙𝘚𝘛𝘜𝘝𝘞𝘟𝘠𝘡𝘢𝘣𝘤𝘥𝘦𝘧𝘨𝘩𝘪𝘫𝘬𝘭𝘮𝘯𝘰𝘱𝘲𝘳𝘴𝘵𝘶𝘷𝘸𝘹𝘺𝘻"),
+    "مونو": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝙰𝙱𝙲𝙳𝙴𝙵𝙶𝙷𝙸𝙹𝙺𝙻𝙼𝙽𝙾𝙿𝚀𝚁𝚂𝚃𝚄𝚅𝚆𝚇𝚈𝚉𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣"),
+}
+
+def _feature_panel(uid):
+    d = _pget(uid)
+    def status(k): return "روشن" if d.get(k) else "خاموش"
+    rows = [
+        [B("همیشه آنلاین: " + status("always_online"), callback_data="self:ft:always_online")],
+        [B("تایپینگ: " + status("typing_mode"), callback_data="self:ft:typing_mode")],
+        [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts")],
+        [B("راهنمای ترجمه", callback_data="self:translate_help")],
+        [B("راهنمای تگ اعضا", callback_data="self:tag_help")],
+        [B("بازگشت", callback_data="self:home")],
+    ]
+    return "تنظیمات تکمیلی\n\nهمیشه آنلاین: اتصال فعال کمک می‌کند، اما وضعیت آنلاین دائمی از طرف تلگرام تضمین نمی‌شود.\nتایپینگ: برای جلوگیری از نمایش گمراه‌کننده، فقط هنگام نوشتن واقعی وضعیت تایپ ارسال می‌شود.\nترجمه: روی پیام موردنظر ریپلای کن و بنویس .ترجمه\nحالت متن روی پیام‌های بعدی اعمال می‌شود.", KB(rows)
+
+async def _translate_text(text):
+    # Google Translate endpoint; requires server internet access.
+    import urllib.parse, urllib.request, json as _json
+    url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=fa&dt=t&q=" + urllib.parse.quote(text[:3500])
+    def _get():
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        return "".join(part[0] for part in data[0] if part and part[0])
+    return await asyncio.to_thread(_get)
+
 # ---------- پنل کاربر ----------
 def _panel(uid):
     row = get_row(uid)
@@ -1214,6 +1296,7 @@ def _panel(uid):
             t = f"{i + 1}️⃣ ➕ تنظیم کلمه"
         kb.append([B(t[:60], callback_data=f"self:s:{i}")])
     kb.append([B("ساعت" + (" (روشن)" if _pget(uid).get("clock_on") else ""), callback_data="self:clk")])
+    kb.append([B("امکانات تکمیلی", callback_data="self:features")])
     kb.append([B("🔌 قطع اتصال" if on else "🔗 اتصال اکانت", callback_data="self:disc" if on else "self:conn")])
     kb.append([B("▶️ فعال‌سازی" if row.paused else "⏸ توقف موقت", callback_data="self:tog")])
     return "\n".join(lines), KB(kb)
@@ -1299,6 +1382,32 @@ async def cb_user(update, context):
     elif a == "games":
         t, kb = _games_panel(uid)
         await qm.edit_text(t, reply_markup=kb)
+    elif a == "features":
+        tx, kb = _feature_panel(uid)
+        await qm.edit_text(tx, reply_markup=kb)
+    elif a == "ft":
+        key = p[2]
+        d = _pget(uid)
+        d[key] = not bool(d.get(key))
+        _pput(uid, d)
+        tx, kb = _feature_panel(uid)
+        await qm.edit_text(tx, reply_markup=kb)
+    elif a == "fonts":
+        d = _pget(uid)
+        current = d.get("font_mode", "ساده")
+        rows = [[B(name + (" (انتخاب‌شده)" if name == current else ""), callback_data="self:font:" + name)] for name in _FONT_MAPS]
+        rows.append([B("بازگشت", callback_data="self:features")])
+        await qm.edit_text("فونت پیام‌های بعدی را انتخاب کن:", reply_markup=KB(rows))
+    elif a == "font":
+        name = ":".join(p[2:])
+        if name in _FONT_MAPS:
+            d = _pget(uid); d["font_mode"] = name; _pput(uid, d)
+        tx, kb = _feature_panel(uid)
+        await qm.edit_text(tx, reply_markup=kb)
+    elif a == "translate_help":
+        await qm.edit_text("برای ترجمه، در اکانت متصل روی پیام متنی ریپلای کن و بنویس .ترجمه\nترجمه به فارسی انجام می‌شود و به اینترنت سرور نیاز دارد.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+    elif a == "tag_help":
+        await qm.edit_text("برای تگ محدود اعضا در گروه بنویس .تگ اعضا\nبرای جلوگیری از اسپم، در هر اجرا حداکثر ۱۰ عضو منشن می‌شوند. ممکن است تلگرام دسترسی یا اطلاعات بعضی اعضا را محدود کند.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
     elif a == "clk":
         tx, kb = _clock_panel(uid)
         await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")

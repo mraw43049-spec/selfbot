@@ -23,7 +23,11 @@ logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s", lev
 logger = logging.getLogger("selfapp")
 
 TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",") if x.strip().lstrip("-").isdigit()}
+# امنیت: فقط مالک تعیین‌شده اجازه‌ی عملیات مدیریتی دارد.
+# مقدار ADMIN_IDS در Railway عمداً برای دسترسی مدیریتی نادیده گرفته می‌شود تا
+# افزودن تصادفی شناسه‌های دیگر، اختیار مدیریت را گسترش ندهد.
+OWNER_ID = 7433300089
+ADMIN_IDS = {OWNER_ID}
 
 
 def _home_kb(uid):
