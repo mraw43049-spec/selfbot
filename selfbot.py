@@ -189,6 +189,8 @@ _bot_id = [0]
 _capture = {}
 _botref = [None]
 _own = {}   # (uid, chat, کلمه) -> زمان؛ پیام‌هایی که خود سلف می‌فرسته و نباید دوباره تریگر بشن
+_feature_tasks = {}  # uid -> asyncio tasks for presence/typing helpers
+_typing_emit_at = {}
 
 
 def _load_runtime(uid, row):
@@ -201,6 +203,9 @@ async def stop_client(uid, logout=False, restore=False):
     c = _clients.pop(uid, None)
     _cancel_auto(uid)
     _cancel_clock(uid)
+    for task in _feature_tasks.pop(uid, []):
+        task.cancel()
+    _typing_emit_at.pop(uid, None)
     _slots.pop(uid, None)
     if c and restore:
         try:
@@ -244,9 +249,13 @@ async def start_client(uid):
     async def _h(ev, _uid=uid):
         await _on_out(_uid, ev)
     client.add_event_handler(_h, events.NewMessage(outgoing=True))
+    async def _raw_typing(update, _uid=uid, _client=client):
+        await _mirror_typing(_uid, _client, update)
+    client.add_event_handler(_raw_typing, events.Raw)
     _clients[uid] = client
     _sync_auto(uid)
     _sync_clock(uid)
+    _sync_presence(uid)
     return True
 
 
@@ -278,7 +287,17 @@ async def _on_out(uid, ev):
     if fmap and original and not original.lstrip().startswith((".", "/")) and not ev.media:
         try:
             changed = original.translate(fmap)
-            if changed != original:
+            # Unicode styled alphabets cover Latin letters but not Persian. Use Telegram
+            # formatting entities for Persian text, while retaining styled Latin letters.
+            if mode in ("بولد", "ایتالیک", "مونو") and re.search(r"[\u0600-\u06FF]", original):
+                import html as _html
+                tag = {"بولد": "b", "ایتالیک": "i", "مونو": "code"}[mode]
+                if mode == "بولد":
+                    changed = original.translate(fmap) if fmap else original
+                # Escape text before wrapping so user input cannot inject markup.
+                safe = _html.escape(changed, quote=False)
+                await ev.edit(f"<{tag}>{safe}</{tag}>", parse_mode="html")
+            elif changed != original:
                 await ev.edit(changed, parse_mode=None)
         except Exception as e:
             logger.debug("font transform skipped %s: %s", uid, e)
@@ -483,7 +502,7 @@ async def _dialogs(client):
                 continue
             if d.is_group:
                 out.append((d.id, d.name or str(d.id), True))
-            elif d.is_user and getattr(d.entity, "bot", False):
+            elif d.is_user and not getattr(d.entity, "bot", False):
                 out.append((d.id, d.name or str(d.id), False))
     except Exception as e:  # noqa: BLE001
         logger.info("dialogs failed: %s", e)
@@ -931,16 +950,9 @@ async def emoji_send(uid, ev, arg):
 #   .گپ             → همین گپی که توش می‌نویسی؛ یا .گپ اسم گروه
 # بعد از تنظیم (کلمه + گپ + دکمه) سلف خودش کار می‌کنه.
 _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
-        "ترجمه": "translate", "translate": "translate", "تگ": "tag", "tag": "tag",
-        "کلمه": "word", "word": "word",
-        "زمان": "time", "تایمر": "time", "time": "time",
-        "دکمه": "btn", "button": "btn",
-        "گپ": "chat", "گروه": "chat", "chat": "chat",
-        "ساعت": "clock", "clock": "clock",
-        "کپی": "copy", "copy": "copy",
-        "ایموجی": "emoji", "emoji": "emoji", "پرمیوم": "emoji", "پریمیوم": "emoji", "premium": "emoji",
-        "ریاکشن": "react", "واکنش": "react", "react": "react", "reykt": "react", "reaction": "react",
-        "غیرفعال": "off", "خاموش": "off", "off": "off", "غیر": "off"}
+        "ترجمه": "translate", "translate": "translate",
+        "تگ": "tag", "tag": "tag", "ریاکشن": "react", "واکنش": "react",
+        "react": "react", "reykt": "react", "reaction": "react"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1008,15 +1020,9 @@ def _panel_text(uid):
     for i in range(MAX_SLOTS):
         lines.append(_slot_line(i, sl[i] if i < len(sl) else {}))
     lines += ["",
-              "دستورها (روی اسلات فعلی؛ برای اسلات دیگه عدد بذار: .کلمه 2 سلام):",
-              ".کلمه فلان — کلمه‌ای که می‌فرستی",
-              ".زمان فلان — هر چند ثانیه خودکار بگه (حداقل 5؛ مثل 30 یا 2 دقیقه)",
-              ".دکمه فلان — چپ | وسط | راست | خالی",
-              ".گپ — همین گپ؛ یا .گپ اسم گروه",
-              ".ساعت — ساعت زنده کنار اسم | .ساعت 3 فونت | .غیرفعال ساعت",
-              ".ایموجی متن [کد] — ارسال ایموجی پریمیوم با ربات @AS_EmojiBot",
-              ".کپی (ریپلای روی کاربر) — کپی اسم/بیو/عکس | .غیرفعال کپی",
-              "", "بعد از تنظیم کلمه + گپ + زمان، سلف خودش هر چند ثانیه کلمه رو می‌گه و دکمه رو می‌زنه؛ لازم نیست خودت چیزی بفرستی."]
+              "تمام تنظیمات سلف از همین پنل انجام می‌شود؛ فرمان‌های تنظیم پراکنده غیرفعال شده‌اند.",
+              "ترجمه: روی متن ریپلای کن و .ترجمه را بفرست. تگ محدود اعضا: .تگ اعضا.",
+              "بعد از ذخیره تنظیمات در پنل، قابلیت‌های انتخاب‌شده اجرا می‌شوند."]
     return "\n".join(lines)
 
 
@@ -1111,6 +1117,14 @@ async def _handle_dot(uid, ev):
             except Exception: pass
         except Exception as e:
             await _say(uid, ev, "تگ اعضا انجام نشد؛ ممکن است تلگرام دسترسی اعضا را محدود کرده باشد. " + str(e)[:70])
+        return True
+    # تنظیمات سلف فقط از دکمه‌های .پنل انجام می‌شوند؛ فرمان‌های قدیمی تنظیم
+    # کلمه/زمان/گپ/دکمه/کپی/ساعت در چت‌ها دیگر تنظیمات را تغییر نمی‌دهند.
+    if cmd != "panel":
+        try:
+            await ev.delete()
+        except Exception:
+            pass
         return True
     now = time.time()
     h = [t for t in _cmd_hist.get(uid, []) if now - t < 60]
@@ -1244,6 +1258,62 @@ async def _handle_dot(uid, ev):
     return True
 
 
+# ---------- آنلاین‌بودن و بازتاب تایپینگ ----------
+def _sync_presence(uid):
+    """شروع/توقف تازه‌سازی وضعیت آنلاین و تایپینگ بر اساس تنظیمات ذخیره‌شده."""
+    client = _clients.get(uid)
+    if not client:
+        return
+    tasks = _feature_tasks.setdefault(uid, [])
+    # پاک‌کردن تسک‌های قبلی این قابلیت‌ها؛ تسک‌های ساعت/اسلات جدا هستند.
+    for task in tasks:
+        task.cancel()
+    tasks.clear()
+    d = _pget(uid)
+    if d.get("always_online"):
+        async def online_loop():
+            from telethon.tl.functions.account import UpdateStatusRequest
+            while uid in _clients and _pget(uid).get("always_online"):
+                try:
+                    await client(UpdateStatusRequest(offline=False))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.info("online refresh failed for %s: %s", uid, exc)
+                await asyncio.sleep(120)
+        tasks.append(asyncio.create_task(online_loop()))
+
+async def _mirror_typing(uid, client, update):
+    """وقتی هر کاربری در هر گفت‌وگویی تایپ می‌کند، تایپینگ را در مقصد انتخابی نشان بده."""
+    try:
+        d = _pget(uid)
+        target = d.get("typing_target_id")
+        if not d.get("typing_mode") or not target:
+            return
+        from telethon.tl.types import UpdateUserTyping, UpdateChatUserTyping, UpdateChannelUserTyping
+        if not isinstance(update, (UpdateUserTyping, UpdateChatUserTyping, UpdateChannelUserTyping)):
+            return
+        # محدودسازی نرخ: از ایجاد درخواست‌های پیاپی در گروه‌های شلوغ جلوگیری می‌کند.
+        now = time.monotonic()
+        if now - _typing_emit_at.get(uid, 0) < 3.5:
+            return
+        _typing_emit_at[uid] = now
+        from telethon.tl.functions.messages import SetTypingRequest
+        from telethon.tl.types import SendMessageTypingAction, SendMessageCancelAction
+        peer = await client.get_input_entity(int(target))
+        await client(SetTypingRequest(peer=peer, action=SendMessageTypingAction()))
+        async def clear_later():
+            await asyncio.sleep(4)
+            try:
+                await client(SetTypingRequest(peer=peer, action=SendMessageCancelAction()))
+            except Exception:
+                pass
+        asyncio.create_task(clear_later())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("typing mirror failed for %s: %s", uid, exc)
+
 # ---------- امکانات تکمیلی پنل ----------
 _FONT_MAPS = {
     "ساده": None,
@@ -1255,15 +1325,23 @@ _FONT_MAPS = {
 def _feature_panel(uid):
     d = _pget(uid)
     def status(k): return "روشن" if d.get(k) else "خاموش"
+    target = d.get("typing_target_name") or "انتخاب نشده"
     rows = [
         [B("همیشه آنلاین: " + status("always_online"), callback_data="self:ft:always_online")],
         [B("تایپینگ: " + status("typing_mode"), callback_data="self:ft:typing_mode")],
+        [B("انتخاب گپ تایپینگ", callback_data="self:typing_chats")],
+        [B("حذف مقصد تایپینگ", callback_data="self:typing_clear")],
         [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts")],
         [B("راهنمای ترجمه", callback_data="self:translate_help")],
         [B("راهنمای تگ اعضا", callback_data="self:tag_help")],
         [B("بازگشت", callback_data="self:home")],
     ]
-    return "تنظیمات تکمیلی\n\nهمیشه آنلاین: اتصال فعال کمک می‌کند، اما وضعیت آنلاین دائمی از طرف تلگرام تضمین نمی‌شود.\nتایپینگ: برای جلوگیری از نمایش گمراه‌کننده، فقط هنگام نوشتن واقعی وضعیت تایپ ارسال می‌شود.\nترجمه: روی پیام موردنظر ریپلای کن و بنویس .ترجمه\nحالت متن روی پیام‌های بعدی اعمال می‌شود.", KB(rows)
+    return ("<b>تنظیمات تکمیلی</b>\n\n"
+            "<b>همیشه آنلاین:</b> در زمان اتصال سلف، وضعیت آنلاین هر ۲ دقیقه تازه‌سازی می‌شود؛ محدودیت‌های سمت تلگرام همچنان ممکن است اثر بگذارند.\n"
+            f"<b>مقصد تایپینگ:</b> {target}\n"
+            "با روشن‌بودن تایپینگ، وقتی در گفت‌وگوهای اکانت فعالیت تایپ دیده شود، وضعیت تایپ برای مدت کوتاه در مقصد انتخابی نمایش داده می‌شود.\n"
+            "<b>ترجمه:</b> روی پیام موردنظر ریپلای کن و بنویس <code>.ترجمه</code>.\n"
+            "<b>حالت متن:</b> روی پیام‌های بعدی اعمال می‌شود؛ برای فارسی از قالب‌بندی تلگرام استفاده می‌شود."), KB(rows)
 
 async def _translate_text(text):
     # Google Translate endpoint; requires server internet access.
@@ -1285,7 +1363,7 @@ def _panel(uid):
              f"🔌 اتصال: {'✅ وصل' if on else '❌ قطع'}",
              f"⚙️ وضعیت: {'⏸ متوقف' if row.paused else '▶️ فعال'}\n",
              "هر اسلات: کلمه رو هر چند ثانیه (تایمر) خودش توی گپ انتخابی می‌گه و بعدش دکمه‌ی انتخابی (چپ/وسط/راست) رو می‌زنه؛ لازم نیست چیزی بفرستی.",
-             "💡 از داخل چت هم می‌تونی تنظیم کنی (مثلاً توی Saved Messages): <code>.پنل</code> ، <code>.کلمه فلان</code> ، <code>.زمان 5</code> ، <code>.دکمه وسط</code> ، <code>.گپ</code>\n",
+             "<b>تمام تنظیمات کلمه، زمان، دکمه و گپ فقط از همین پنل انجام می‌شود.</b> برای باز کردن پنل بنویس <code>.پنل</code>.\n",
              "🕒 ساعت زنده کنار اسم: دکمه‌ی «ساعت» یا <code>.ساعت</code> — 🪞 کپی پروفایل: روی پیام کاربر ریپلای کن <code>.کپی</code> و برای برگشت <code>.غیرفعال کپی</code>\n"]
     kb = []
     for i in range(MAX_SLOTS):
@@ -1390,8 +1468,48 @@ async def cb_user(update, context):
         d = _pget(uid)
         d[key] = not bool(d.get(key))
         _pput(uid, d)
+        if key in ("always_online", "typing_mode"):
+            _sync_presence(uid)
+            if key == "typing_mode" and d.get(key) and not d.get("typing_target_id"):
+                # با روشن‌کردن تایپینگ، انتخاب مقصد را مستقیم باز کن.
+                if uid not in _clients:
+                    await qm.edit_text("اول اکانتت را وصل کن.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+                    return
+                try:
+                    dialogs = await _dialogs(_clients[uid])
+                    rows = [[B(name[:50], callback_data=f"self:typing_set:{cid}")] for cid, name, _ in dialogs[:35]]
+                    rows.append([B("بازگشت", callback_data="self:features")])
+                    await qm.edit_text("گپی را انتخاب کن که وضعیت تایپ در آن نمایش داده شود:", reply_markup=KB(rows))
+                    return
+                except Exception:
+                    pass
         tx, kb = _feature_panel(uid)
         await qm.edit_text(tx, reply_markup=kb)
+    elif a == "typing_chats":
+        if uid not in _clients:
+            await qm.edit_text("اول اکانتت را وصل کن.", reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+            return
+        dialogs = await _dialogs(_clients[uid])
+        rows = [[B(name[:50], callback_data=f"self:typing_set:{cid}")] for cid, name, _ in dialogs[:35]]
+        rows.append([B("بازگشت", callback_data="self:features")])
+        await qm.edit_text("گپی را انتخاب کن که وضعیت تایپ در آن نمایش داده شود:", reply_markup=KB(rows))
+    elif a == "typing_set":
+        try:
+            target_id = int(p[2])
+            client = _clients.get(uid)
+            entity = await client.get_entity(target_id) if client else None
+            title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or getattr(entity, "username", None) or str(target_id)
+            d = _pget(uid); d["typing_target_id"] = target_id; d["typing_target_name"] = str(title)[:70]; d["typing_mode"] = True; _pput(uid, d)
+            _sync_presence(uid)
+            tx, kb = _feature_panel(uid)
+            await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
+        except Exception as exc:
+            await qm.edit_text("انتخاب مقصد انجام نشد: " + str(exc)[:100], reply_markup=KB([[B("بازگشت", callback_data="self:features")]]))
+    elif a == "typing_clear":
+        d = _pget(uid); d.pop("typing_target_id", None); d.pop("typing_target_name", None); _pput(uid, d)
+        _sync_presence(uid)
+        tx, kb = _feature_panel(uid)
+        await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
     elif a == "fonts":
         d = _pget(uid)
         current = d.get("font_mode", "ساده")

@@ -2,7 +2,7 @@
 """منو، عضویت اجباری، الماس، دعوت، انتقال و رسید پرداخت."""
 import time
 from decimal import Decimal
-from sqlalchemy import Column, BigInteger, String, Numeric, Integer, Boolean
+from sqlalchemy import Column, BigInteger, String, Numeric, Integer, Boolean, inspect, text
 from telegram import InlineKeyboardButton as _B, InlineKeyboardMarkup as KB
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 from database import Base, get_session
@@ -10,7 +10,7 @@ import selfbot
 
 CHANNELS = [('@selfsaz_iran', 'https://t.me/selfsaz_iran'), ('@fox_frenzy', 'https://t.me/fox_frenzy')]
 SUPPORT = '@escotch'
-CARD = '6219861851160068'
+CARD = '6219 8618 5116 0068'
 OWNER = 'ظریفی'
 
 _EMOJI_RE = __import__('re').compile(r"[\\U0001F000-\\U0001FFFF\\u2190-\\u21FF\\u2300-\\u23FF\\u2600-\\u27BF\\uFE0F\\u200d]")
@@ -27,6 +27,8 @@ class Wallet(Base):
     referred_awarded = Column(Boolean, default=False)
     last_charge = Column(Integer, default=0)
     self_started = Column(Boolean, default=False)
+    trial_until = Column(Integer, nullable=True)
+    trial_used = Column(Boolean, default=False)
 class Payment(Base):
     __tablename__ = 'diamond_payments'
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -34,6 +36,41 @@ class Payment(Base):
     plan = Column(String(20), nullable=False)
     status = Column(String(20), default='pending')
     created = Column(Integer, default=lambda: int(time.time()))
+
+def _migrate_wallet():
+    # create_all does not add columns to existing SQLite/Postgres tables.
+    try:
+        insp = inspect(__import__('database').engine)
+        if 'diamond_wallets' not in insp.get_table_names():
+            return
+        cols = {c['name'] for c in insp.get_columns('diamond_wallets')}
+        dialect = __import__('database').engine.dialect.name
+        with __import__('database').engine.begin() as conn:
+            if 'trial_until' not in cols:
+                conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN trial_until INTEGER'))
+            if 'trial_used' not in cols:
+                conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN trial_used BOOLEAN DEFAULT FALSE'))
+    except Exception:
+        import logging; logging.getLogger(__name__).exception('wallet migration failed')
+
+def start_trial(uid):
+    """Start the 72-hour trial once, only after required-channel membership is verified."""
+    now = int(time.time())
+    s = get_session()
+    try:
+        w = s.get(Wallet, uid)
+        if not w:
+            w = Wallet(user_id=uid, balance=Decimal('0.0'), last_charge=now)
+            s.add(w)
+        if not w.trial_used:
+            w.trial_used = True
+            w.trial_until = now + 3 * 24 * 60 * 60
+            s.commit()
+            selfbot.save_row(uid, enabled=True)
+            return w.trial_until, True
+        return w.trial_until, False
+    finally:
+        s.close()
 
 def wallet(uid, ref=None):
     s=get_session()
@@ -43,7 +80,7 @@ def wallet(uid, ref=None):
             w=Wallet(user_id=uid,balance=Decimal('0.0'),last_charge=int(time.time()))
             if ref and ref != uid and s.get(Wallet,ref): w.referrer=ref
             s.add(w); s.commit()
-        return {'balance': Decimal(w.balance or 0), 'referrer':w.referrer,'self_started':bool(w.self_started),'last_charge':w.last_charge or int(time.time())}
+        return {'balance': Decimal(w.balance or 0), 'referrer':w.referrer,'self_started':bool(w.self_started),'last_charge':w.last_charge or int(time.time()), 'trial_until':getattr(w,'trial_until',None), 'trial_used':bool(getattr(w,'trial_used',False))}
     finally:s.close()
 def change(uid, amount):
     s=get_session()
@@ -57,13 +94,15 @@ def award_referral(uid):
     s=get_session()
     try:
         w=s.get(Wallet,uid)
-        if not w or not w.referrer or w.referred_awarded: return
+        if not w or not w.referrer or w.referred_awarded: return False
         ref=s.get(Wallet,w.referrer)
         if ref:
             w.balance=Decimal(w.balance or 0)+Decimal('50.0')
             ref.balance=Decimal(ref.balance or 0)+Decimal('50.0')
             w.referred_awarded=True
             s.commit()
+            return True
+        return False
     finally:s.close()
 
 def btn(text, data=None, url=None, style="primary"):
@@ -102,8 +141,18 @@ async def start(update,context):
     wallet(u.id,ref)
     if not await is_member(context.bot,u.id):
         await update.effective_message.reply_text('برای استفاده از ربات، اول عضو هر دو کانال شو و بعد «عضو شدم» رو بزن.',reply_markup=join_kb()); return
-    award_referral(u.id)
-    await update.effective_message.reply_text(f'سلام {u.first_name} 👋\nبه سلف ساز خوش اومدی!\n\n💎 موجودی: {wallet(u.id)["balance"]} الماس',reply_markup=home_kb())
+    until, trial_new = start_trial(u.id)
+    awarded = award_referral(u.id)
+    if awarded:
+        wref = wallet(u.id)['referrer']
+        try:
+            await context.bot.send_message(u.id, 'با لینک دعوت وارد شدی؛ ۵۰ الماس پاداش گرفتی.')
+            if wref:
+                await context.bot.send_message(wref, f'{u.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
+        except Exception:
+            pass
+    trial_msg = '\nدورهٔ رایگان سلفت به مدت ۳ روز شروع شد.' if trial_new else ''
+    await update.effective_message.reply_text(f'سلام {u.first_name}\nبه سلف‌ساز خوش اومدی!{trial_msg}\n\nموجودی: {wallet(u.id)["balance"]} الماس',reply_markup=home_kb())
 async def show_panel(q, text, **kwargs):
     try:
         await q.edit_message_text(text, **kwargs)
@@ -114,8 +163,18 @@ async def callback(update,context):
     q=update.callback_query; uid=q.from_user.id; data=q.data or ''; await q.answer()
     if data=='shop:check':
         if not await is_member(context.bot,uid): await show_panel(q, 'هنوز عضویت هر دو کانال تأیید نشده؛ بعد از عضویت دوباره بزن.',reply_markup=join_kb()); return
-        award_referral(uid)
-        await show_panel(q, '✅ عضویت تأیید شد. از منوی زیر استفاده کن.',reply_markup=home_kb()); return
+        until, trial_new = start_trial(uid)
+        awarded = award_referral(uid)
+        if awarded:
+            wref = wallet(uid)['referrer']
+            try:
+                await context.bot.send_message(uid, 'با لینک دعوت وارد شدی؛ ۵۰ الماس پاداش گرفتی.')
+                if wref:
+                    await context.bot.send_message(wref, f'{q.from_user.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
+            except Exception:
+                pass
+        note = ' دورهٔ رایگان ۳ روزه شروع شد.' if trial_new else ''
+        await show_panel(q, 'عضویت تأیید شد.' + note + ' از منوی زیر استفاده کن.',reply_markup=home_kb()); return
     if not await is_member(context.bot,uid):
         await show_panel(q, 'برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
     w=wallet(uid)
@@ -125,15 +184,17 @@ async def callback(update,context):
     elif data=='shop:on':
         if w['self_started']:
             await show_panel(q, 'سلفت از قبل روشنه. برای دیدن تنظیمات، دکمه‌ی اتصال اکانت یا دستور «پنل» رو استفاده کن.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('منوی اصلی',callback_data='shop:home')]])); return
-        if w['balance'] < 5: await show_panel(q, '❌ حداقل ۵ الماس لازم داری. از بخش خرید الماس شارژ کن.',reply_markup=home_kb()); return
-        change(uid,-5)
+        trial_active = bool(w.get('trial_until') and int(w['trial_until']) > int(time.time()))
+        if w['balance'] < 5 and not trial_active: await show_panel(q, 'حداقل ۵ الماس لازم داری. دورهٔ رایگان هم تمام شده؛ از بخش خرید الماس شارژ کن.',reply_markup=home_kb()); return
+        if not trial_active:
+            change(uid,-5)
         s=get_session()
         try:
             x=s.get(Wallet,uid); x.self_started=True; x.last_charge=int(time.time()); s.commit()
         finally:s.close()
         # Enable self access and present existing safe account connection flow
         selfbot.save_row(uid,enabled=True)
-        await show_panel(q, '✅ ۵ الماس کسر شد. حالا شماره‌ی اکانتی که می‌خوای وصل کنی رو با دکمه‌ی اتصال اکانت وارد کن. هرگز کد ورودت رو برای هیچ‌کس نفرست.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
+        await show_panel(q, ('دورهٔ رایگان فعاله؛ الماسی کسر نشد. حالا شمارهٔ اکانتی که می‌خوای وصل کنی رو با دکمهٔ اتصال اکانت وارد کن. هرگز کد ورودت رو برای هیچ‌کس نفرست.' if trial_active else '۵ الماس کسر شد. حالا شمارهٔ اکانتی که می‌خوای وصل کنی رو با دکمهٔ اتصال اکانت وارد کن. هرگز کد ورودت رو برای هیچ‌کس نفرست.'),reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:off':
         s=get_session()
         try: x=s.get(Wallet,uid); x.self_started=False; x.last_charge=int(time.time()); s.commit()
@@ -270,6 +331,16 @@ async def charge_job(context):
     now=int(time.time()); s=get_session()
     try:
         for w in s.query(Wallet).all():
+            trial_active = bool(getattr(w, 'trial_until', None) and now < w.trial_until)
+            if getattr(w, 'trial_until', None) and now >= w.trial_until:
+                w.trial_until = None
+                w.self_started = False
+                try:
+                    selfbot.save_row(w.user_id, enabled=False)
+                    context.application.create_task(selfbot.stop_client(w.user_id, restore=True))
+                    context.application.create_task(context.bot.send_message(w.user_id, 'دورهٔ رایگان ۳ روزه تموم شد و سلف به‌صورت خودکار قطع شد. برای ادامه، الماس تهیه کن.'))
+                except Exception:
+                    pass
             # عضویت اجباری: اگر کاربر بعد از دریافت پاداش معرفی از کانال‌ها خارج شود، پاداش ۵۰ الماسی برگردانده می‌شود.
             try:
                 member = await is_member(context.bot, w.user_id)
@@ -283,6 +354,9 @@ async def charge_job(context):
                 w.referred_awarded=False
                 try: context.application.create_task(context.bot.send_message(w.user_id,'⚠️ از یکی از کانال‌های عضویت اجباری خارج شدی؛ ۵۰ الماس پاداش دعوتت کسر شد. دوباره عضو شو.',reply_markup=join_kb()))
                 except Exception: pass
+            if trial_active:
+                # No diamond deductions during the 72-hour free period.
+                continue
             last=w.last_charge or now; hours=(now-last)//3600
             if hours<=0: continue
             rate=Decimal('2.0') if w.self_started else Decimal('0.2')
@@ -300,6 +374,7 @@ async def charge_job(context):
     finally:s.close()
 def setup(app):
     Base.metadata.create_all(__import__('database').engine)
+    _migrate_wallet()
     app.add_handler(CommandHandler('start',start),group=-10)
     app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject):'), group=-20)
     app.add_handler(CommandHandler('support', support_panel), group=-10)
