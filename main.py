@@ -69,6 +69,7 @@ def main():
         logger.warning("ADMIN_IDS خالیه؛ هیچ‌کس نمی‌تونه کاربر فعال کنه")
     init_db()
     app = Application.builder().token(TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(cb_back, pattern=r"^admin:back$"))
     selfbot.register(app, ADMIN_IDS)
