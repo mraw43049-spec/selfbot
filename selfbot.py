@@ -12,6 +12,7 @@
 
 - ساعت زنده کنار اسم: .ساعت (روشن) | .ساعت 3 (انتخاب فونت) | .ساعت فونت (لیست) | .غیرفعال ساعت
 - ایموجی پریمیوم (بدون اکانت پریمیوم، از طریق ربات اینلاین): .ایموجی متن [کد ایموجی]
+- ریاکشن: روی پیام کاربر ریپلای کن و بنویس .ریاکشن  یا  /reykt  (اختیاری: تعداد و ایموجی، مثل .ریاکشن 20 🔥)
 - کپی پروفایل: روی پیام یه کاربر ریپلای کن و بنویس .کپی  (اسم، بیو، عکس) | برگشت: .غیرفعال کپی
 
 امنیت: سشن‌ها رمزنگاری‌شده ذخیره می‌شن (Fernet)، سلف هیچ‌وقت روی ربات روباهیو کلیک نمی‌کنه،
@@ -810,6 +811,70 @@ async def send_premium(client, chat, text, reply_to=None):
     return True
 
 
+_react_busy = set()
+REACT_MAX = 50
+REACT_DEFAULT = "❤"
+
+
+async def react_start(uid, ev, arg):
+    """.ریاکشن [تعداد] [ایموجی] روی پیام کاربر ریپلای کن؛ تا N پیام آخرش (پیش‌فرض ۲۰) ریاکشن می‌خوره.
+    (هر پیام فقط یه ریاکشن از هر اکانت می‌گیره، پس «۲۰ ریاکشن» یعنی ۲۰ پیام اخیر اون کاربر.)"""
+    client = _clients.get(uid)
+    if not client:
+        return "❌ اول اکانتت رو وصل کن (/self)."
+    if not ev.is_reply:
+        return "↩️ روی پیام اون کاربر ریپلای کن و بنویس:\n.ریاکشن   یا   .ریاکشن 20 🔥"
+    if uid in _react_busy:
+        return "⏳ یه ریاکشن دیگه در جریانه؛ صبر کن تموم شه."
+    a = fa2en(arg or "")
+    m = re.search(r"\d+", a)
+    count = min(max(int(m.group(0)), 1), REACT_MAX) if m else 20
+    emo = re.sub(r"[\d\s]+", "", a).replace("\ufe0f", "") or REACT_DEFAULT
+    r = await ev.get_reply_message()
+    if not r or not r.sender_id:
+        return "❌ فرستنده‌ی این پیام مشخص نیست."
+    _react_busy.add(uid)
+    asyncio.create_task(_react_run(uid, ev, client, r, count, emo))
+    return None
+
+
+async def _react_run(uid, ev, client, r, count, emo):
+    from telethon import errors
+    from telethon.tl.functions.messages import SendReactionRequest
+    from telethon.tl.types import ReactionEmoji
+    done = 0
+    err = None
+    try:
+        async for msg in client.iter_messages(ev.chat_id, offset_id=r.id + 1, limit=800):
+            if msg.sender_id != r.sender_id:
+                continue
+            try:
+                await client(SendReactionRequest(peer=ev.chat_id, msg_id=msg.id, reaction=[ReactionEmoji(emoticon=emo)]))
+                done += 1
+            except errors.FloodWaitError as e:
+                if e.seconds > 30:
+                    err = f"محدودیت تلگرام ({e.seconds} ثانیه)"
+                    break
+                await asyncio.sleep(e.seconds + 1)
+            except errors.ReactionInvalidError:
+                err = "این ایموجی به‌عنوان ریاکشن مجاز نیست"
+                break
+            except errors.ReactionsTooManyError:
+                continue
+            except Exception as e:  # noqa: BLE001
+                logger.info("self react %s: %s", uid, e)
+                err = str(e)[:80]
+                break
+            if done >= count:
+                break
+            await asyncio.sleep(0.8)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)[:80]
+    finally:
+        _react_busy.discard(uid)
+    await _say(uid, ev, f"{emo} {done} ریاکشن زده شد" + (f"\n⚠️ {err}" if err else ""))
+
+
 def _u16(t):
     return len(t.encode("utf-16-le")) // 2
 
@@ -883,6 +948,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "ساعت": "clock", "clock": "clock",
         "کپی": "copy", "copy": "copy",
         "ایموجی": "emoji", "emoji": "emoji", "پرمیوم": "emoji", "پریمیوم": "emoji", "premium": "emoji",
+        "ریاکشن": "react", "واکنش": "react", "react": "react", "reykt": "react", "reaction": "react",
         "غیرفعال": "off", "خاموش": "off", "off": "off", "غیر": "off"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
@@ -894,12 +960,14 @@ _cmd_hist = {}
 def parse_dot(raw):
     """'.کلمه سلام' → ('word', 'سلام'). اگه دستور شناخته‌شده نبود None."""
     t = (raw or "").strip().translate(_AR2FA)
-    if not t.startswith("."):
+    if not (t.startswith(".") or t.startswith("/")):
         return None
-    m = re.match(r"^\.\s*(\S+)\s*(.*)$", t, re.S)
+    m = re.match(r"^[./]\s*(\S+)\s*(.*)$", t, re.S)
     if not m:
         return None
     cmd = _CMD.get(m.group(1).replace("\u200c", "").lower())
+    if cmd and t.startswith("/") and cmd != "react":
+        return None      # با / فقط دستور ریاکشن کار می‌کنه
     return (cmd, m.group(2).strip()) if cmd else None
 
 
@@ -1008,7 +1076,7 @@ async def _find_chat(client, name):
 
 async def _handle_dot(uid, ev):
     raw = ev.raw_text or ""
-    if not raw.lstrip().startswith("."):
+    if not raw.lstrip().startswith((".", "/")):
         return False
     pc = parse_dot(raw)
     if not pc:
@@ -1040,6 +1108,11 @@ async def _handle_dot(uid, ev):
                 await _say(uid, ev, await clock_set(uid, on=False))
             else:
                 await _say(uid, ev, "❓ مثل: .غیرفعال کپی   یا   .غیرفعال ساعت")
+            return True
+        if cmd == "react":
+            msg_out = await react_start(uid, ev, arg)
+            if msg_out:
+                await _say(uid, ev, msg_out)
             return True
         if cmd == "emoji":
             msg_out = await emoji_send(uid, ev, arg)
