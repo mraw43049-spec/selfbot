@@ -3,7 +3,7 @@
 import time
 from decimal import Decimal
 from sqlalchemy import Column, BigInteger, String, Numeric, Integer, Boolean
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as KB
+from telegram import InlineKeyboardButton as _B, InlineKeyboardMarkup as KB
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 from database import Base, get_session
 import selfbot
@@ -12,6 +12,13 @@ CHANNELS = [('@selfsaz_iran', 'https://t.me/selfsaz_iran'), ('@fox_frenzy', 'htt
 SUPPORT = '@escotch'
 CARD = '6219861851160068'
 OWNER = 'ظریفی'
+
+_EMOJI_RE = __import__('re').compile(r"[\\U0001F000-\\U0001FFFF\\u2190-\\u21FF\\u2300-\\u23FF\\u2600-\\u27BF\\uFE0F\\u200d]")
+def B(text, *args, **kwargs):
+    text = _EMOJI_RE.sub("", text or "").strip()
+    api = kwargs.pop("api_kwargs", {}) or {}
+    api.setdefault("style", "danger" if any(x in text for x in ("رد", "لغو", "خاموش", "حذف")) else "success" if any(x in text for x in ("تأیید", "روشن", "عضو شدم")) else "primary")
+    return _B(text, *args, api_kwargs=api, **kwargs)
 class Wallet(Base):
     __tablename__ = 'diamond_wallets'
     user_id = Column(BigInteger, primary_key=True)
@@ -59,15 +66,20 @@ def award_referral(uid):
             s.commit()
     finally:s.close()
 
+def btn(text, data=None, url=None, style="primary"):
+    kw = {"api_kwargs": {"style": style}}
+    if url:
+        return B(text, url=url, **kw)
+    return B(text, callback_data=data, **kw)
+
 def home_kb():
-    return KB([[B('🏠 ساخت سلف',callback_data='shop:create',api_kwargs={'style':'success'})],
-               [B('💎 خرید الماس',callback_data='shop:buy',api_kwargs={'style':'primary'})],
-               [B('📊 داشبورد',callback_data='shop:dash'),B('❓ سلف چیه؟',callback_data='shop:about')],
-               [B('👤 دعوت دوستان',callback_data='shop:invite'),B('💱 انتقال الماس',callback_data='shop:transfer')],
-               [B('⭐ آموزش استفاده',callback_data='shop:help')],
-               [B('✨ پشتیبانی',url='https://t.me/escotch')],
-               [B('💎 درخواست نمایندگی',url='https://t.me/escotch')],
-               [B('📣 کانال ما',url='https://t.me/selfsaz_iran'),B('🦊 گروه ما',url='https://t.me/fox_frenzy')]])
+    return KB([
+        [btn('ساخت سلف', 'shop:create', style='success')],
+        [btn('خرید الماس', 'shop:buy')],
+        [btn('دعوت دوستان', 'shop:invite'), btn('انتقال الماس', 'shop:transfer')],
+        [btn('آموزش استفاده', 'shop:help'), btn('درباره سلف', 'shop:about')],
+        [btn('حساب کاربری', 'shop:dash')],
+    ])
 def join_kb():
     rows=[[B('عضویت در '+ch, url=url)] for ch,url in CHANNELS]
     rows.append([B('✅ عضو شدم',callback_data='shop:check')]); return KB(rows)
@@ -92,22 +104,28 @@ async def start(update,context):
         await update.effective_message.reply_text('برای استفاده از ربات، اول عضو هر دو کانال شو و بعد «عضو شدم» رو بزن.',reply_markup=join_kb()); return
     award_referral(u.id)
     await update.effective_message.reply_text(f'سلام {u.first_name} 👋\nبه سلف ساز خوش اومدی!\n\n💎 موجودی: {wallet(u.id)["balance"]} الماس',reply_markup=home_kb())
+async def show_panel(q, text, **kwargs):
+    try:
+        await q.edit_message_text(text, **kwargs)
+    except Exception:
+        await q.message.reply_text(text, **kwargs)
+
 async def callback(update,context):
     q=update.callback_query; uid=q.from_user.id; data=q.data or ''; await q.answer()
     if data=='shop:check':
-        if not await is_member(context.bot,uid): await q.message.reply_text('هنوز عضویت هر دو کانال تأیید نشده؛ بعد از عضویت دوباره بزن.',reply_markup=join_kb()); return
+        if not await is_member(context.bot,uid): await show_panel(q, 'هنوز عضویت هر دو کانال تأیید نشده؛ بعد از عضویت دوباره بزن.',reply_markup=join_kb()); return
         award_referral(uid)
-        await q.message.reply_text('✅ عضویت تأیید شد. از منوی زیر استفاده کن.',reply_markup=home_kb()); return
+        await show_panel(q, '✅ عضویت تأیید شد. از منوی زیر استفاده کن.',reply_markup=home_kb()); return
     if not await is_member(context.bot,uid):
-        await q.message.reply_text('برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
+        await show_panel(q, 'برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
     w=wallet(uid)
-    if data=='shop:home': await q.message.reply_text('🏠 منوی اصلی',reply_markup=home_kb())
+    if data=='shop:home': await show_panel(q, 'منوی اصلی',reply_markup=home_kb())
     elif data=='shop:create':
-        await q.message.reply_text(f'💎 موجودی فعلی: {w["balance"]}\nهر بار روشن‌کردن: ۵ الماس\nهزینه‌ی ساعتی در حالت روشن: ۲ الماس؛ در حالت خاموش: ۰٫۲ الماس.',reply_markup=KB([[B('▶️ روشن کردن',callback_data='shop:on')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('🏠 منوی اصلی',callback_data='shop:home')]]))
+        await show_panel(q, f'💎 موجودی فعلی: {w["balance"]}\nهر بار روشن‌کردن: ۵ الماس\nهزینه‌ی ساعتی در حالت روشن: ۲ الماس؛ در حالت خاموش: ۰٫۲ الماس.',reply_markup=KB([[B('▶️ روشن کردن',callback_data='shop:on')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:on':
         if w['self_started']:
-            await q.message.reply_text('سلفت از قبل روشنه. برای دیدن تنظیمات، دکمه‌ی اتصال اکانت یا دستور «پنل» رو استفاده کن.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('🏠 منوی اصلی',callback_data='shop:home')]])); return
-        if w['balance'] < 5: await q.message.reply_text('❌ حداقل ۵ الماس لازم داری. از بخش خرید الماس شارژ کن.',reply_markup=home_kb()); return
+            await show_panel(q, 'سلفت از قبل روشنه. برای دیدن تنظیمات، دکمه‌ی اتصال اکانت یا دستور «پنل» رو استفاده کن.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('منوی اصلی',callback_data='shop:home')]])); return
+        if w['balance'] < 5: await show_panel(q, '❌ حداقل ۵ الماس لازم داری. از بخش خرید الماس شارژ کن.',reply_markup=home_kb()); return
         change(uid,-5)
         s=get_session()
         try:
@@ -115,25 +133,86 @@ async def callback(update,context):
         finally:s.close()
         # Enable self access and present existing safe account connection flow
         selfbot.save_row(uid,enabled=True)
-        await q.message.reply_text('✅ ۵ الماس کسر شد. حالا شماره‌ی اکانتی که می‌خوای وصل کنی رو با دکمه‌ی اتصال اکانت وارد کن. هرگز کد ورودت رو برای هیچ‌کس نفرست.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('🏠 منوی اصلی',callback_data='shop:home')]]))
+        await show_panel(q, '✅ ۵ الماس کسر شد. حالا شماره‌ی اکانتی که می‌خوای وصل کنی رو با دکمه‌ی اتصال اکانت وارد کن. هرگز کد ورودت رو برای هیچ‌کس نفرست.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:off':
         s=get_session()
         try: x=s.get(Wallet,uid); x.self_started=False; x.last_charge=int(time.time()); s.commit()
         finally:s.close()
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
-        await q.message.reply_text('⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
-    elif data=='shop:dash': await q.message.reply_text(f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('💎 خرید الماس',callback_data='shop:buy')],[B('🏠 منوی اصلی',callback_data='shop:home')]]))
-    elif data=='shop:about': await q.message.reply_text('سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('✨ پشتیبانی',url='https://t.me/escotch')],[B('🏠 منوی اصلی',callback_data='shop:home')]]))
-    elif data=='shop:help': await q.message.reply_text('برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
-    elif data=='shop:buy': await q.message.reply_text(f'💎 خرید الماس\n\n۱ ماه — ۱۰۰۰ الماس — ۷۵٬۰۰۰ تومان\n۲ ماه — ۱۸۰۰ الماس — ۱۲۰٬۰۰۰ تومان\n\nشماره کارت: {CARD}\nبه نام: {OWNER}\nبعد از واریز، رسید رو همین‌جا ارسال کن؛ رسید و توضیحات برای پشتیبانی فرستاده می‌شه.',reply_markup=KB([[B('خرید ۱ ماهه',callback_data='shop:pay:1')],[B('خرید ۲ ماهه',callback_data='shop:pay:2')],[B('🏠 منوی اصلی',callback_data='shop:home')]]))
+        await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
+    elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
+    elif data=='shop:buy': await show_panel(q, f'💎 خرید الماس\n\n۱ ماه — ۱۰۰۰ الماس — ۷۵٬۰۰۰ تومان\n۲ ماه — ۱۸۰۰ الماس — ۱۲۰٬۰۰۰ تومان\n\nشماره کارت: {CARD}\nبه نام: {OWNER}\nبعد از واریز، رسید رو همین‌جا ارسال کن؛ رسید و توضیحات برای پشتیبانی فرستاده می‌شه.',reply_markup=KB([[B('خرید ۱ ماهه',callback_data='shop:pay:1')],[B('خرید ۲ ماهه',callback_data='shop:pay:2')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data.startswith('shop:pay:'):
         plan=data.rsplit(':',1)[1]; context.user_data['payment_plan']=plan
-        await q.message.reply_text('حالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
+        await show_panel(q, 'حالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
     elif data=='shop:invite':
         me=await context.bot.get_me(); link=f'https://t.me/{me.username}?start=ref{uid}'
-        await q.message.reply_text(f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('🏠 منوی اصلی',callback_data='shop:home')]]))
+        await show_panel(q, f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:transfer':
-        context.user_data['transfer_step']='recipient'; await q.message.reply_text('آیدی عددی گیرنده یا @شناسه کاربری رو بفرست:')
+        context.user_data['transfer_step']='recipient'; await show_panel(q, 'آیدی عددی گیرنده یا @شناسه کاربری رو بفرست:')
+async def payment_review(update, context):
+    q = update.callback_query
+    uid = q.from_user.id
+    if uid not in selfbot.ADMIN_IDS:
+        await q.answer("دسترسی ندارید", show_alert=True)
+        return
+    await q.answer()
+    parts = (q.data or "").split(":")
+    if len(parts) != 3:
+        return
+    action, pid = parts[1], parts[2]
+    try:
+        pid = int(pid)
+    except ValueError:
+        return
+    s = get_session()
+    try:
+        p = s.get(Payment, pid)
+        if not p:
+            await q.edit_message_reply_markup(reply_markup=None)
+            await q.message.reply_text("درخواست پرداخت پیدا نشد.")
+            return
+        if p.status != "pending":
+            await q.answer("این درخواست قبلاً بررسی شده است.", show_alert=True)
+            return
+        if action == "approve":
+            amount = Decimal("1000") if p.plan == "1" else Decimal("1800")
+            w = s.get(Wallet, p.user_id)
+            if not w:
+                w = Wallet(user_id=p.user_id, balance=Decimal("0"), last_charge=int(time.time()))
+                s.add(w)
+            w.balance = Decimal(w.balance or 0) + amount
+            p.status = "approved"
+            s.commit()
+            await context.bot.send_message(p.user_id, f"پرداخت تأیید شد؛ {amount} الماس به حسابت اضافه شد.")
+            await q.edit_message_reply_markup(reply_markup=None)
+            await q.message.reply_text(f"تأیید شد. {amount} الماس به کاربر {p.user_id} اضافه شد.")
+        elif action == "reject":
+            p.status = "rejected"
+            s.commit()
+            await context.bot.send_message(p.user_id, "درخواست خرید الماس رد شد. برای بررسی بیشتر با پشتیبانی تماس بگیر.")
+            await q.edit_message_reply_markup(reply_markup=None)
+            await q.message.reply_text(f"درخواست #{pid} رد شد.")
+    finally:
+        s.close()
+
+async def support_panel(update, context):
+    uid = update.effective_user.id
+    if uid not in selfbot.ADMIN_IDS:
+        return
+    s = get_session()
+    try:
+        pending = s.query(Payment).filter(Payment.status == "pending").order_by(Payment.id.desc()).limit(20).all()
+        lines = ["پنل پشتیبانی", "درخواست‌های پرداخت در انتظار:"]
+        lines += [f"#{p.id} | کاربر {p.user_id} | پلن {p.plan}" for p in pending]
+        if not pending:
+            lines.append("درخواست پرداختی در انتظار نیست.")
+        await update.effective_message.reply_text("\\n".join(lines), reply_markup=KB([[btn("بازگشت به پنل اصلی", "shop:home")]]))
+    finally:
+        s.close()
+
 async def incoming(update,context):
     m=update.effective_message; u=update.effective_user
     if not m or not u or update.effective_chat.type!='private': return
@@ -150,7 +229,7 @@ async def incoming(update,context):
         recipients.add('@escotch')
         for admin in recipients:
             try:
-                await context.bot.send_message(admin,f'💳 رسید خرید الماس\nکاربر: {u.id} (@{u.username or "ندارد"})\nپلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan=="1" else "۲ ماهه / ۱۸۰۰ الماس"}\nشناسه پیگیری: {pid}')
+                await context.bot.send_message(admin,f'رسید خرید الماس\nکاربر: {u.id} (@{u.username or "ندارد"})\nپلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan=="1" else "۲ ماهه / ۱۸۰۰ الماس"}\nشناسه پیگیری: {pid}', reply_markup=KB([[btn('تأیید و واریز الماس', f'pay:approve:{pid}', style='success'), btn('رد درخواست', f'pay:reject:{pid}', style='danger')]]))
                 if m.photo: await context.bot.send_photo(admin,m.photo[-1].file_id,caption=f'رسید کاربر {u.id} | پرداخت #{pid}')
                 elif m.document: await context.bot.send_document(admin,m.document.file_id,caption=f'رسید کاربر {u.id} | پرداخت #{pid}')
             except Exception: pass
@@ -222,6 +301,8 @@ async def charge_job(context):
 def setup(app):
     Base.metadata.create_all(__import__('database').engine)
     app.add_handler(CommandHandler('start',start),group=-10)
+    app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject):'), group=-20)
+    app.add_handler(CommandHandler('support', support_panel), group=-10)
     app.add_handler(CallbackQueryHandler(callback,pattern=r'^shop:'),group=-10)
     app.add_handler(MessageHandler((filters.TEXT|filters.PHOTO|filters.Document.ALL)&filters.ChatType.PRIVATE, incoming),group=-10)
     app.job_queue.run_repeating(charge_job, interval=300, first=60, name='diamond-hourly-charges')
