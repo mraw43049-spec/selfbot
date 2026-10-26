@@ -9,6 +9,7 @@ from database import Base, get_session
 import selfbot
 
 CHANNELS = [('@selfsaz_iran', 'https://t.me/selfsaz_iran'), ('@fox_frenzy', 'https://t.me/fox_frenzy')]
+REQUIRE_JOIN = False  # عضویت اجباری خاموش؛ برای روشن‌کردن دوباره True کن
 SUPPORT = '@escotch'
 CARD = '6219861851160068'
 OWNER = 'ظریفی'
@@ -72,6 +73,7 @@ def join_kb():
     rows=[[B('عضویت در '+ch, url=url)] for ch,url in CHANNELS]
     rows.append([B('✅ عضو شدم',callback_data='shop:check')]); return KB(rows)
 async def is_member(bot,uid):
+    if not REQUIRE_JOIN: return True
     for ch,_ in CHANNELS:
         try:
             m=await bot.get_chat_member(ch,uid)
@@ -88,10 +90,14 @@ async def start(update,context):
         try: ref=int(context.args[0].replace('ref',''))
         except: pass
     wallet(u.id,ref)
-    if not await is_member(context.bot,u.id):
-        await update.effective_message.reply_text('برای استفاده از ربات، اول عضو هر دو کانال شو و بعد «عضو شدم» رو بزن.',reply_markup=join_kb()); return
     award_referral(u.id)
-    await update.effective_message.reply_text(f'سلام {u.first_name} 👋\nبه سلف ساز خوش اومدی!\n\n💎 موجودی: {wallet(u.id)["balance"]} الماس',reply_markup=home_kb())
+    tx=("🤖 به ربات سلف خوش اومدی.\n\n"
+        "اگه مدیر برات فعالش کرده، /self رو بزن یا بنویس «سلف».")
+    rows=[]
+    if u.id in selfbot.ADMIN_IDS:
+        tx+="\n\nمدیر: برای فعال‌کردن کاربر، دکمه‌ی پایین یا /admin."
+        rows.append([B("مدیریت سلف",callback_data="selfa:menu",api_kwargs={"style":"primary"})])
+    await update.effective_message.reply_text(tx,reply_markup=KB(rows) if rows else None)
 async def callback(update,context):
     q=update.callback_query; uid=q.from_user.id; data=q.data or ''; await q.answer()
     if data=='shop:check':
@@ -131,7 +137,7 @@ async def callback(update,context):
         await q.message.reply_text('حالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
     elif data=='shop:invite':
         me=await context.bot.get_me(); link=f'https://t.me/{me.username}?start=ref{uid}'
-        await q.message.reply_text(f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('🏠 منوی اصلی',callback_data='shop:home')]]))
+        await q.message.reply_text(f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('🏠 منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:transfer':
         context.user_data['transfer_step']='recipient'; await q.message.reply_text('آیدی عددی گیرنده یا @شناسه کاربری رو بفرست:')
 async def incoming(update,context):
@@ -193,7 +199,7 @@ async def charge_job(context):
         for w in s.query(Wallet).all():
             # عضویت اجباری: اگر کاربر بعد از دریافت پاداش معرفی از کانال‌ها خارج شود، پاداش ۵۰ الماسی برگردانده می‌شود.
             try:
-                member = await is_member(context.bot, w.user_id)
+                member = await is_member(context.bot, w.user_id) if REQUIRE_JOIN else True
             except Exception:
                 member = True
             if not member and w.referred_awarded:
