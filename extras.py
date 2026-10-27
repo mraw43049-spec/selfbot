@@ -28,9 +28,29 @@ MU_MAX = 30                   # حداکثر کاربر ساکت‌شده
 TOOL_PER_MIN = 20             # سقف دستورهای ابزار در دقیقه (برای جلوگیری از فشار به سرویس‌های بیرونی)
 
 TOGGLES = ("ar_on", "del_on", "ttl_on", "mn_on", "wl_on", "mu_on")
-CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del")
+CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del", "tg")
 TEXT_STEPS = ("ar_text", "wl_add", "mu_add")
 CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story")
+
+
+# راهنمای هر ابزار؛ با زدن دکمه‌اش نشون داده می‌شه. دستورها <code> هستن (تک‌فاصله) تا با یک لمس کپی بشن.
+TOOL_GUIDES = {
+    "tr": ("ترجمه", "روی پیام متنی ریپلای کن و بنویس:\n<code>.ترجمه</code>\nترجمه به فارسی انجام می‌شه."),
+    "tag": ("تگ اعضا", "توی گروه بنویس:\n<code>.تگ اعضا</code>\nبرای جلوگیری از اسپم، هر بار حداکثر ۱۰ عضو منشن می‌شن."),
+    "calc": ("ماشین‌حساب", "بنویس:\n<code>.حساب 25*4+10</code>\nیا روی پیامِ دارای عبارت ریپلای کن و <code>.حساب</code> بفرست.\n"
+             "پشتیبانی: جمع، تفریق، ضرب، تقسیم، توان ^ ، درصدِ باقی‌مانده % ، sqrt / abs / round / ln / log و اعداد فارسی."),
+    "price": ("قیمت", "خلاصهٔ قیمت‌ها:\n<code>.قیمت</code>\nارز، طلا و سکه:\n<code>.قیمت دلار</code>\nیورو، پوند، درهم، لیر، طلا، سکه\n"
+              "ارز دیجیتال:\n<code>.قیمت بیتکوین</code>\nاتریوم، تتر، تون، ریپل، سولانا، دوج، ترون، بایننس\nقیمت ارز/طلا به تومان نشون داده می‌شه."),
+    "date": ("تاریخ", "تاریخ شمسی، میلادی، قمری و ساعت تهران:\n<code>.تاریخ</code>\nتبدیل تاریخ:\n<code>.تاریخ 1405/8/5</code>\nیا\n<code>.تاریخ 2026-10-27</code>"),
+    "short": ("کوتاه‌کردن لینک", "بنویس:\n<code>.کوتاه https://example.com</code>\nیا روی پیام لینک‌دار ریپلای کن و <code>.کوتاه</code> بفرست (تا ۳ لینک)."),
+    "story": ("ذخیرهٔ استوری", "روی استوری فورواردی/منشن‌شده ریپلای کن و بنویس:\n<code>.استوری</code>\nیا با لینک:\n<code>.استوری t.me/username/s/123</code>\n"
+              "توی Saved Messages ذخیره می‌شه. استوری «محافظت از محتوا» ذخیره نمی‌شه."),
+    "save": ("ذخیرهٔ مدیا", "روی عکس/ویدیو/فایل ریپلای کن و بنویس:\n<code>.ذخیره</code>\nتوی Saved Messages ذخیره می‌شه."),
+    "emoji": ("ایموجی پریمیوم", "بنویس:\n<code>.ایموجی متن</code>\nمتنت با ایموجی پریمیوم فرستاده می‌شه."),
+    "mute": ("سکوت", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.سکوت</code>\nبرداشتن:\n<code>.رفع سکوت</code>\nلیست و دکمهٔ روشن/خاموش از «امکانات بیشتر» ← مدیریت سکوت."),
+    "block": ("بلاک سریع", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.بلاک</code>\nرفع بلاک:\n<code>.رفع بلاک</code>\nبلاک واقعی تلگرام انجام می‌شه."),
+}
+TOOL_ORDER = ("tr", "tag", "calc", "price", "date", "short", "story", "save", "emoji", "mute", "block")
 
 _cache = {}      # uid -> OrderedDict[msg_id -> rec]
 _ar_seen = {}    # uid -> {sender_id: ts}
@@ -316,7 +336,6 @@ def more_panel(uid, page=1):
     def t(k, label):
         return B(f"{label}: {_st(d, k)}", callback_data=f"self:mt:{k}:{page}", style="success" if d.get(k) else "primary")
 
-    cp = sb._copy_btn
     page1 = [
         [t("ar_on", "پاسخ خودکار پی‌وی"), B("متن پاسخ", callback_data="self:ar_text", style="primary")],
         [t("del_on", "خبر حذف/ویرایش پی‌وی")],
@@ -324,19 +343,10 @@ def more_panel(uid, page=1):
         [t("mn_on", "خبر منشن در گروه‌ها")],
         [t("wl_on", f"ناظر کلمه/آیدی ({len(wl)})"), B("مدیریت ناظر", callback_data="self:wl", style="primary")],
         [t("mu_on", f"سکوت پی‌وی ({len(mu)} نفر)"), B("مدیریت سکوت", callback_data="self:mu", style="primary")],
-        [B("همهٔ دستورات سلف (کپی با یک لمس)", callback_data="selfi:cmds", style="primary")],
     ]
-    # صفحهٔ ابزارها: هر دکمه = دستور + توضیح؛ با لمس کپی می‌شه
-    page2 = [[cp(lbl, c)] for c, lbl in (
-        (".ترجمه", "ترجمه — ریپلای روی متن؛ ترجمهٔ فارسی"),
-        (".تگ اعضا", "تگ اعضا — منشن حداکثر ۱۰ عضو"),
-        (".حساب ", "ماشین‌حساب — مثل .حساب 25*4+10"),
-        (".قیمت ", "قیمت — دلار، یورو، طلا، سکه، ارز دیجیتال"),
-        (".تاریخ", "تاریخ — شمسی، میلادی، قمری، ساعت"),
-        (".کوتاه ", "کوتاه‌کردن لینک — یا ریپلای روی لینک"),
-        (".استوری", "ذخیرهٔ استوری — ریپلای یا لینک"),
-        (".بلاک", "بلاک سریع — ریپلای روی کاربر"),
-    )]
+    # صفحهٔ ابزارها: هر ابزار یه دکمهٔ واقعیه؛ با زدنش راهنمای استفاده‌اش میاد
+    tb = [B(TOOL_GUIDES[k][0], callback_data=f"self:tg:{k}", style="primary") for k in TOOL_ORDER]
+    page2 = [tb[i:i + 2] for i in range(0, len(tb), 2)]
     groups = []
     for g in (page1, page2):
         for i in range(0, len(g), MORE_ROWS_PER_PAGE):
@@ -394,6 +404,12 @@ async def handle_cb(uid, a, p, qm, context):
         page = int(p[2]) if len(p) > 2 and p[2].isdigit() else 1
         tx, kb = more_panel(uid, page)
         await qm.edit_text(tx, reply_markup=kb)
+    elif a == "tg":
+        key = p[2] if len(p) > 2 else ""
+        if key in TOOL_GUIDES:
+            title, body = TOOL_GUIDES[key]
+            await qm.edit_text(f"<b>{title}</b>\n\n{body}", parse_mode="HTML",
+                               reply_markup=KB([[B("بازگشت", callback_data="self:more:2", style="primary")]]))
     elif a == "mt":
         key = p[2] if len(p) > 2 else ""
         page = int(p[3]) if len(p) > 3 and p[3].isdigit() else 1

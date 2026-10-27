@@ -1881,53 +1881,6 @@ async def on_contact(update, context):
 _banner = {"file_id": None}
 _panel_msg = {}     # uid -> (chat_id, message_id) آخرین پنلی که فرستاده شده
 
-# هر ردیف: (متنی که با لمس دکمه کپی می‌شه، برچسب دکمه = اسم + توضیح). توضیح‌ها داخل خود دکمه‌ان.
-CMD_ITEMS = (
-    (".پنل", "پنل — باز کردن همین پنل"),
-    (".ساعت", "ساعت — ساعت زنده کنار اسم"),
-    (".غیرفعال ساعت", "غیرفعال ساعت — خاموش‌کردن ساعت"),
-    (".کپی", "کپی پروفایل — ریپلای روی پیام کاربر"),
-    (".غیرفعال کپی", "غیرفعال کپی — توقف کپی پروفایل"),
-    (".ذخیره", "ذخیره — ریپلای روی مدیا؛ می‌ره Saved Messages"),
-    (".ایموجی ", "ایموجی — ایموجی پریمیوم؛ بعدش متن بنویس"),
-    (".ریاکشن ", "ریاکشن — ریپلای؛ تا ۳ ریاکشن"),
-    (".ترجمه", "ترجمه — ریپلای روی متن؛ ترجمهٔ فارسی"),
-    (".تگ اعضا", "تگ اعضا — منشن حداکثر ۱۰ عضو"),
-    (".حساب ", "حساب — ماشین‌حساب مثل .حساب 25*4+10"),
-    (".قیمت ", "قیمت — دلار، طلا، سکه، ارز دیجیتال"),
-    (".تاریخ", "تاریخ — شمسی، میلادی، قمری"),
-    (".کوتاه ", "کوتاه — کوتاه‌کردن لینک (یا ریپلای)"),
-    (".استوری", "استوری — ذخیرهٔ استوری (ریپلای یا لینک)"),
-    (".سکوت", "سکوت — ریپلای روی کاربر"),
-    (".رفع سکوت", "رفع سکوت — برداشتن سکوت"),
-    (".بلاک", "بلاک — ریپلای روی کاربر"),
-    (".رفع بلاک", "رفع بلاک — برداشتن بلاک"),
-)
-CMDS_PER_PAGE = 8
-
-
-def _copy_btn(label, copy):
-    """دکمه‌ای که با لمس، متن «copy» رو توی کلیپ‌بورد کپی می‌کنه (copy_text در Bot API)."""
-    return _IKB(_clean(label), api_kwargs={"style": "primary", "copy_text": {"text": copy}})
-
-
-def cmds_panel(page=1):
-    pages = max(1, -(-len(CMD_ITEMS) // CMDS_PER_PAGE))
-    page = min(max(int(page or 1), 1), pages)
-    chunk = CMD_ITEMS[(page - 1) * CMDS_PER_PAGE: page * CMDS_PER_PAGE]
-    rows = [[_copy_btn(lbl, cp)] for cp, lbl in chunk]
-    nav = []
-    if page > 1:
-        nav.append(B("◀ قبلی", callback_data=f"selfi:cmds:{page - 1}", style="primary"))
-    if page < pages:
-        nav.append(B("بعدی ▶", callback_data=f"selfi:cmds:{page + 1}", style="success"))
-    if nav:
-        rows.append(nav)
-    rows.append([B("بازگشت", callback_data="self:home", style="primary")])
-    rows.append([B("بستن پنل", callback_data="selfi:close", style="danger")])
-    return f"› دستورات سلف ({page}/{pages})\nروی هر دکمه بزن تا دستورش کپی بشه.", KB(rows)
-
-
 def _make_banner():
     import io
     from PIL import Image, ImageDraw, ImageFont
@@ -2014,7 +1967,7 @@ def _inl_kb(uid, private=False):
     rows.insert(3, trow)
     rows.insert(4, [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts", style="primary")])
     rows.append([B("امکانات بیشتر", callback_data="self:more", style="success")])
-    last = [B("دستورات سلف", callback_data="selfi:cmds", style="primary")]
+    last = []
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
     if private:
         rows.append([B("🔌 قطع اتصال" if uid in _clients else "🔗 اتصال اکانت",
@@ -2173,14 +2126,6 @@ async def cb_inline(update, context):
                 await q.message.delete()
             except Exception:  # noqa: BLE001
                 pass
-    elif a == "cmds" and (imid or q.message):
-        await q.answer()
-        ctx_tx, ctx_kb = cmds_panel(p[2] if len(p) > 2 and p[2].isdigit() else 1)
-        if imid:
-            await _inl_edit(bot, imid, ctx_tx, ctx_kb)
-        else:
-            tgt = _PhotoMsg(q.message) if getattr(q.message, "photo", None) else q.message
-            await tgt.edit_text(ctx_tx, reply_markup=ctx_kb)
     elif a == "react" and imid:
         await q.answer()
         kb = KB([[B("قلب", callback_data="selfi:r:h", style="danger"), B("آتش", callback_data="selfi:r:f", style="danger"),
