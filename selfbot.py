@@ -929,21 +929,30 @@ def _u16(t):
 
 
 async def emoji_send(uid, ev, arg):
-    """ایموجی پریمیوم مستقیم از خود اکانت (بدون ربات واسطه).
-    دو حالت: ۱) ایموجی پریمیوم رو از کیبوردت توی متن بذار  ۲) {آیدی عددی ایموجی} بنویس.
-    اکانت باید پریمیوم باشه."""
+    """ارسال ایموجی پریمیوم در هر گپ/پیوی؛ برای اکانت عادی از اینلاین بات کمک می‌گیرد."""
     import copy
     from telethon.tl.types import MessageEntityCustomEmoji
     client = _clients.get(uid)
     if not client:
         return "❌ اول اکانتت رو وصل کن (/self)."
     if not arg:
-        return "✨ مثل: .ایموجی سلام 😎(ایموجی پریمیوم)\nیا با آیدی: .ایموجی سلام {5368324170671202286}"
+        return "✨ مثال: .ایموجی سلام {5260416394419265081}\nدر گروه، پیوی یا پیام‌های ذخیره‌شده قابل استفاده است."
     try:
         me = await client.get_me()
         if not getattr(me, "premium", False):
-            return "❌ اکانتی که وصل کردی پریمیوم نیست؛ ایموجی پریمیوم فقط از اکانت پریمیوم ارسال می‌شه."
-        raw = ev.raw_text or ""
+            # حساب عادی نمی‌تواند مستقیماً custom-emoji entity بفرستد؛ از نتیجهٔ اینلاین استفاده می‌کنیم.
+            # قالب AS_EmojiBot کدها را داخل [ ] می‌پذیرد.
+            inline_text = re.sub(r"\{([0-9۰-۹٠-٩]{5,25})\}", r"[\1]", arg)
+            ok = await send_premium(client, ev.chat_id, inline_text,
+                                    reply_to=ev.reply_to_msg_id if ev.is_reply else None)
+            if not ok:
+                return "❌ نتیجهٔ ایموجی از ربات اینلاین دریافت نشد. مطمئن شو @AS_EmojiBot فعال است و اینلاین آن در دسترس است."
+            try:
+                await ev.delete()
+            except Exception:
+                pass
+            return None
+        raw = ev.raw_text or "" 
         end = len(raw.rstrip())
         start = end - len(arg)
         start16 = _u16(raw[:start])
