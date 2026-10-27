@@ -18,6 +18,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 import selfbot
 import commerce
+import premium_emoji
 from database import init_db
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s", level=logging.INFO)
@@ -66,13 +67,14 @@ def main():
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(cb_back, pattern=r"^admin:back$"))
     selfbot.register(app, ADMIN_IDS)
+    premium_emoji.register(app)
     for x in os.environ.get("SUPPORT_IDS", "").replace("،", ",").split(","):
         x = x.strip()
         if x.isdigit() and int(x) not in ADMIN_IDS:
             selfbot.SUPPORT_IDS.add(int(x))
     commerce.setup(app)
     logger.info("selfbot standalone started")
-    app.run_polling(allowed_updates=["message", "callback_query", "inline_query"], drop_pending_updates=True)
+    app.run_polling(allowed_updates=["message", "callback_query", "inline_query", "chosen_inline_result"], drop_pending_updates=True)
 
 
 if __name__ == "__main__":
