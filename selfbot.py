@@ -965,7 +965,15 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "react": "react", "reykt": "react", "reaction": "react",
         "ذخیره": "save", "save": "save",
         "ایموجی": "emoji", "emoji": "emoji", "ساعت": "clock", "clock": "clock",
-        "کپی": "copy", "copy": "copy", "غیرفعال": "off", "غیر‌فعال": "off", "off": "off"}
+        "کپی": "copy", "copy": "copy", "غیرفعال": "off", "غیر‌فعال": "off", "off": "off",
+        # --- ابزارها و سکوت/بلاک (پیاده‌سازی در extras.py) ---
+        "سکوت": "mute", "mute": "mute", "رفعسکوت": "unmute", "unmute": "unmute",
+        "بلاک": "block", "block": "block", "آنبلاک": "unblock", "unblock": "unblock", "رفع": "undo",
+        "حساب": "calc", "محاسبه": "calc", "ماشینحساب": "calc", "calc": "calc",
+        "قیمت": "price", "price": "price", "تاریخ": "date", "date": "date",
+        "اذان": "prayer", "اوقات": "prayer", "azan": "prayer", "prayer": "prayer",
+        "کوتاه": "short", "کوتاهکن": "short", "short": "short", "shorten": "short",
+        "استوری": "story", "story": "story"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1134,6 +1142,10 @@ async def _handle_dot(uid, ev):
     if cmd == "save":
         import extras
         await _say(uid, ev, await extras.save_replied(uid, ev))
+        return True
+    import extras
+    if cmd in extras.CMD_WORDS:
+        await extras.handle_cmd(uid, ev, cmd, arg)
         return True
     # تنظیمات سلف (کلمه/زمان/گپ/دکمه/ساعت) فقط از دکمه‌های .پنل انجام می‌شوند؛
     # دستورهای ریپلایی و سریع (.کپی، .غیرفعال کپی، .ریاکشن، .ایموجی، .ساعت) توی چت کار می‌کنن.
@@ -1808,8 +1820,8 @@ async def user_text(update, context):
     if not _allowed(uid):
         ud.pop("self_st", None)
         return
-    if st.get("step") in ("ar_text", "wl_add"):
-        import extras
+    import extras
+    if st.get("step") in extras.TEXT_STEPS:
         ud.pop("self_st", None)
         await extras.handle_text(uid, st, text, msg, context)
         raise ApplicationHandlerStop
@@ -1910,7 +1922,10 @@ CMDS_TEXT = (
     ".کپی  ← (ریپلای) کپی پروفایل | .غیرفعال کپی\n"
     ".ذخیره  ← (ریپلای روی مدیا) ذخیره توی Saved Messages\n"
     ".ایموجی متن  ← ایموجی پریمیوم\n"
-    ".ریاکشن 🔥❤👍  ← (ریپلای) تا ۳ ریاکشن روی همون پیام"
+    ".ریاکشن 🔥❤👍  ← (ریپلای) تا ۳ ریاکشن روی همون پیام\n"
+    ".حساب 2+2 | .قیمت دلار | .تاریخ | .اذان | .کوتاه لینک\n"
+    ".استوری  ← ذخیرهٔ استوری | .سکوت / .بلاک  ← (ریپلای)\n"
+    "راهنمای کامل: پنل ← امکانات بیشتر ← صفحهٔ بعد"
 )
 
 
