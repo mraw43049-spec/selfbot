@@ -877,29 +877,33 @@ def _clock_panel(uid):
     return tx, KB(kb)
 
 
-EMOJI_BOT = (os.environ.get("SELF_EMOJI_BOT", "").strip()).lstrip("@")
+EMOJI_BOT = ""
 
 def configure_emoji_bot(username):
-    """Use explicit SELF_EMOJI_BOT when set; otherwise use this project’s own inline bot."""
+    """همیشه از ربات همین پروژه استفاده کن؛ وابستگی به ربات شخص ثالث لازم نیست."""
     global EMOJI_BOT
-    override = os.environ.get("SELF_EMOJI_BOT", "").strip().lstrip("@")
-    EMOJI_BOT = override or (username or "").lstrip("@")
+    EMOJI_BOT = (username or "").strip().lstrip("@")
     logger.info("premium emoji inline bot configured: @%s", EMOJI_BOT or "(missing)")
 
 
 async def send_premium(client, chat, text, reply_to=None):
     """ارسال نتیجهٔ اینلاین در همان گفتگوی جاری (گروه، سوپرگروه یا پیوی)."""
     try:
-        # resolve a real Telethon entity; raw chat_id can be ambiguous for channels/groups
-        peer = await client.get_input_entity(chat)
+        if not EMOJI_BOT:
+            raise RuntimeError("یوزرنیم ربات همین پروژه پیدا نشد؛ ابتدا ربات را راه‌اندازی کن.")
+        # استفاده از peer واقعی همین پیام باعث می‌شود در گروه و پیوی مقصد درست انتخاب شود.
+        peer = chat if getattr(chat, "SUBCLASS_OF_ID", None) else await client.get_input_entity(chat)
         results = await client.inline_query(EMOJI_BOT, text, entity=peer)
         if not results:
             logger.warning("premium inline returned no results for peer=%s", chat)
             return False
-        # Prefer the actual premium-conversion result instead of blindly clicking result[0].
+        # نتیجهٔ خطا را به‌عنوان پیام موفق ارسال نکن.
+        errors = [r for r in results if (getattr(r, "title", "") or "").startswith("❌")]
         chosen = next((r for r in results if "تبدیل به ایموجی پرمیوم" in (getattr(r, "title", "") or "")), None)
+        if chosen is None and errors:
+            raise RuntimeError(getattr(errors[0], "title", "کد ایموجی معتبر نیست"))
         if chosen is None:
-            chosen = next((r for r in results if not (getattr(r, "title", "") or "").startswith("❌")), results[0])
+            raise RuntimeError("ربات همین پروژه نتیجهٔ تبدیل ایموجی پرمیوم برنگرداند.")
         await chosen.click(entity=peer, reply_to=reply_to)
         return True
     except Exception as e:
@@ -963,19 +967,19 @@ async def emoji_send(uid, ev, arg):
     try:
         me = await client.get_me()
         if not getattr(me, "premium", False):
-            # حساب عادی نمی‌تواند مستقیماً custom-emoji entity بفرستد؛ از نتیجهٔ اینلاین استفاده می‌کنیم.
-            # قالب AS_EmojiBot کدها را داخل [ ] می‌پذیرد.
+            # حساب عادی از اینلاینِ ربات خود همین پروژه استفاده می‌کند؛ ربات خارجی لازم نیست.
             inline_text = re.sub(r"\{([0-9۰-۹٠-٩]{5,25})\}", r"[\1]", arg)
             try:
-                ok = await send_premium(client, ev.peer_id, inline_text,
+                ok = await send_premium(client, ev.input_chat, inline_text,
                                         reply_to=ev.reply_to_msg_id if ev.is_reply else None)
             except Exception as inline_error:
                 logger.info("premium inline failed in chat %s: %s", ev.chat_id, inline_error)
-                return (f"❌ ارسال اینلاین در این گفتگو انجام نشد. ربات اینلاین تنظیم‌شده: @{EMOJI_BOT or 'نامشخص'}. "
-                        f"در BotFather برای همین ربات /setinline را فعال کن و اگر لازم است /setinlinefeedback را هم روشن کن. "
-                        "جزئیات: " + str(inline_error)[:100])
+                return (f"❌ ارسال ایموجی با ربات خود پروژه (@{EMOJI_BOT or 'نامشخص'}) انجام نشد. "
+                        "در BotFather برای همین ربات /setinline را فعال کن؛ برای حذف دکمهٔ موقت هم /setinlinefeedback را روشن کن. "
+                        "اگر تلگرام اجازهٔ custom emoji به این ربات ندهد، این محدودیت با تغییر کد دور زده نمی‌شود. "
+                        "جزئیات: " + str(inline_error)[:180])
             if not ok:
-                return f"❌ ربات اینلاین @{EMOJI_BOT or 'نامشخص'} هیچ نتیجه‌ای برنگرداند؛ تنظیمات Inline و قالب کد {{آیدی}} را بررسی کن."
+                return f"❌ ربات همین پروژه (@{EMOJI_BOT or 'نامشخص'}) هیچ نتیجه‌ای برنگرداند؛ /setinline و قالب کد {{آیدی}} را بررسی کن."
             try:
                 await ev.delete()
             except Exception:
