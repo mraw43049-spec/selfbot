@@ -157,10 +157,34 @@ def save_row(uid, **kw):
         s.close()
 
 
+# کلمه‌هایی که هیچ‌کس نمی‌تونه برای اسلات تنظیم کنه (فاصله، ریزه‌کاری نوشتاری و حروف تکراری هم دور زدنش نمی‌شه)
+_BANNED_RAW = ("روب روب", "شکار", "هور هور", "عو عو", "روباه")
+_BAN_TR = str.maketrans("يكۀةىئؤأإآ", "یکههیییااا")
+
+
+def _squash(t):
+    t = (t or "").translate(_BAN_TR).lower()
+    t = re.sub(r"[\u064B-\u065F\u0670\u0640]", "", t)      # اعراب و کشیده
+    t = re.sub(r"[^\w]|_", "", t)                              # فاصله، نیم‌فاصله، علامت‌ها
+    return re.sub(r"(.)\1+", r"\1", t)                         # روووب → روب
+
+
+_BANNED = tuple(_squash(w) for w in _BANNED_RAW)
+
+
+def is_banned_word(text):
+    q = _squash(text)
+    return bool(q) and any(b in q for b in _BANNED)
+
+
 def slots_of(row):
     try:
         v = json.loads(row.slots or "[]")
-        return [x for x in v if isinstance(x, dict)][:MAX_SLOTS]
+        out = [x for x in v if isinstance(x, dict)][:MAX_SLOTS]
+        for x in out:      # کلمهٔ ممنوعه‌ای که قبلاً ذخیره شده هم کار نمی‌کنه و از پنل پاک می‌شه
+            if is_banned_word(x.get("word")):
+                x["word"] = ""
+        return out
     except Exception:
         return []
 
@@ -276,6 +300,12 @@ async def _on_out(uid, ev):
             _capture.pop(uid, None)
         elif ev.chat_id == cap["chat"] and (ev.raw_text or "").strip():
             _capture.pop(uid, None)
+            if is_banned_word(ev.raw_text):
+                try:
+                    await _botref[0].send_message(uid, "⛔ این کلمه مجاز نیست و برای اسلات ثبت نشد. یه کلمهٔ دیگه انتخاب کن.")
+                except Exception as e:  # noqa: BLE001
+                    logger.info("self banned notify failed: %s", e)
+                return
             sl = _get_slots(uid)
             sl[cap["slot"]]["word"] = (ev.raw_text or "").strip()[:40]
             sl[cap["slot"]].setdefault("delay", 0)
@@ -1220,6 +1250,9 @@ async def _handle_dot(uid, ev):
         if cmd == "word":
             if not rest:
                 await _say(uid, ev, "✏️ مثل: .کلمه سلام   (یا اسلات مشخص: .کلمه 2 سلام)")
+                return True
+            if is_banned_word(rest):
+                await _say(uid, ev, "⛔ این کلمه مجاز نیست.")
                 return True
             i = _pick_slot(uid, sl, explicit, rest)
             sl[i]["word"] = rest[:40]
