@@ -514,6 +514,11 @@ async def _auto_fire(uid, client, s):
 async def start_all(app):
     _bot_id[0] = app.bot.id
     _botref[0] = app.bot
+    try:
+        bot_me = await app.bot.get_me()
+        configure_emoji_bot(bot_me.username)
+    except Exception as e:
+        logger.warning("could not resolve inline bot username: %s", e)
     asyncio.create_task(prepare_banner(app))
     if not configured():
         logger.info("self: SELF_API_ID/SELF_API_HASH تنظیم نشده؛ سلف غیرفعال است")
@@ -872,7 +877,14 @@ def _clock_panel(uid):
     return tx, KB(kb)
 
 
-EMOJI_BOT = (os.environ.get("SELF_EMOJI_BOT", "AS_EmojiBot").strip() or "AS_EmojiBot").lstrip("@")
+EMOJI_BOT = (os.environ.get("SELF_EMOJI_BOT", "").strip()).lstrip("@")
+
+def configure_emoji_bot(username):
+    """Use explicit SELF_EMOJI_BOT when set; otherwise use this project’s own inline bot."""
+    global EMOJI_BOT
+    override = os.environ.get("SELF_EMOJI_BOT", "").strip().lstrip("@")
+    EMOJI_BOT = override or (username or "").lstrip("@")
+    logger.info("premium emoji inline bot configured: @%s", EMOJI_BOT or "(missing)")
 
 
 async def send_premium(client, chat, text, reply_to=None):
@@ -959,11 +971,11 @@ async def emoji_send(uid, ev, arg):
                                         reply_to=ev.reply_to_msg_id if ev.is_reply else None)
             except Exception as inline_error:
                 logger.info("premium inline failed in chat %s: %s", ev.chat_id, inline_error)
-                return ("❌ ارسال اینلاین در این گفتگو انجام نشد. مطمئن شو @AS_EmojiBot اجازهٔ استفادهٔ اینلاین دارد؛ "
-                        "اگر در گروه هستی، یک‌بار ربات را در همان گروه با @AS_EmojiBot صدا بزن و دوباره امتحان کن. "
+                return (f"❌ ارسال اینلاین در این گفتگو انجام نشد. ربات اینلاین تنظیم‌شده: @{EMOJI_BOT or 'نامشخص'}. "
+                        f"در BotFather برای همین ربات /setinline را فعال کن و اگر لازم است /setinlinefeedback را هم روشن کن. "
                         "جزئیات: " + str(inline_error)[:100])
             if not ok:
-                return "❌ ربات اینلاین هیچ نتیجه‌ای برنگرداند؛ @AS_EmojiBot یا قالب کد [آیدی] را بررسی کن."
+                return f"❌ ربات اینلاین @{EMOJI_BOT or 'نامشخص'} هیچ نتیجه‌ای برنگرداند؛ تنظیمات Inline و قالب کد {{آیدی}} را بررسی کن."
             try:
                 await ev.delete()
             except Exception:
