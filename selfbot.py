@@ -1450,10 +1450,12 @@ async def cmd_self(update, context):
 async def cb_user(update, context):
     q = update.callback_query
     uid = q.from_user.id
+    if not await _owner_gate(q):
+        return
     if not _allowed(uid):
         await q.answer()
         return
-    p = q.data.split(":")
+    p = _parse_cb(q)[0].split(":")
     a = p[1]
     ud = context.user_data
     qm = q.message or _InlineMsg(context.bot, q.inline_message_id, uid)
@@ -2035,7 +2037,7 @@ async def on_inline_query(update, context):
         await iq.answer([], cache_time=0, is_personal=True)
         return
     cap = _inl_caption(iq.from_user.first_name or "")
-    kb = _inl_kb(uid)
+    kb = _lock_kb(_inl_kb(uid), uid)
     rid = f"panel{int(time.time())}"
     url = os.environ.get("SELF_BANNER_URL", "").strip()
     if url:
@@ -2047,7 +2049,47 @@ async def on_inline_query(update, context):
     await iq.answer([res], cache_time=0, is_personal=True)
 
 
+_inl_owner = {}   # inline_message_id -> صاحب پنل
+
+
+def _parse_cb(q):
+    """callback_data → (داده‌ی اصلی، آیدی صاحب پنل یا None)."""
+    base, _, owner = (q.data or "").partition("|")
+    return base, (int(owner) if owner.isdigit() else None)
+
+
+def _lock_kb(kb, uid):
+    """به همه‌ی دکمه‌های پنل اینلاین آیدی صاحب رو می‌چسبونه تا کس دیگه‌ای نتونه بزنه."""
+    if uid is None or kb is None or not getattr(kb, "inline_keyboard", None):
+        return kb
+    rows = []
+    for row in kb.inline_keyboard:
+        nr = []
+        for b in row:
+            cd = b.callback_data
+            if cd and "|" not in cd and len(cd) + len(str(uid)) + 1 <= 64:
+                b = _IKB(b.text, callback_data=f"{cd}|{uid}", api_kwargs=dict(b.api_kwargs or {}))
+            nr.append(b)
+        rows.append(nr)
+    return KB(rows)
+
+
+async def _owner_gate(q):
+    """True یعنی اجازه‌ی ادامه؛ وگرنه به کاربرِ غیرصاحب پیام رد می‌ده."""
+    base, owner = _parse_cb(q)
+    if q.inline_message_id and owner is None:
+        await q.answer("🔒 این پنل قدیمیه؛ توی چت دوباره «.پنل» بنویس.", show_alert=True)
+        return False
+    if owner is not None and q.from_user.id != owner:
+        await q.answer("🔒 این پنل مال کس دیگه‌ایه. خودت توی ربات سلف رو فعال کن و پنل خودت رو بیار.", show_alert=True)
+        return False
+    if q.inline_message_id and owner is not None:
+        _inl_owner[q.inline_message_id] = owner
+    return True
+
+
 async def _inl_edit(bot, imid, text, kb, parse_mode=None):
+    kb = _lock_kb(kb, _inl_owner.get(imid))
     try:
         await bot.edit_message_caption(inline_message_id=imid, caption=text[:1024], reply_markup=kb, parse_mode=parse_mode)
         return
@@ -2090,10 +2132,12 @@ _REACT_SETS = {"h": ["❤"], "f": ["🔥"], "l": ["👍"], "a": ["❤", "🔥", 
 async def cb_inline(update, context):
     q = update.callback_query
     uid = q.from_user.id
+    if not await _owner_gate(q):
+        return
     if not _allowed(uid):
         await q.answer("این پنل برای تو نیست.", show_alert=True)
         return
-    p = (q.data or "").split(":")
+    p = _parse_cb(q)[0].split(":")
     a = p[1]
     imid = q.inline_message_id
     bot = context.bot
@@ -2194,6 +2238,7 @@ async def send_inline_panel(uid, ev):
 
 # ---------- پنل مدیر ----------
 ADMIN_IDS = set()
+SUPPORT_IDS = set()   # فقط پنل پشتیبانی؛ هیچ دسترسی مدیریتی ندارند
 
 
 def admin_menu_kb():

@@ -4,6 +4,7 @@
 متغیرهای Railway:
   BOT_TOKEN      توکن ربات جدید (از @BotFather)
   ADMIN_IDS      آیدی عددی مدیرها، با کاما (مثلاً 123,456)
+  SUPPORT_IDS    (اختیاری) آیدی عددی پشتیبان‌ها با کاما؛ فقط به /support دسترسی دارن
   SELF_API_ID    از my.telegram.org
   SELF_API_HASH  از my.telegram.org
   SELF_KEY       یه رشته‌ی تصادفی بلند برای رمزنگاری سشن‌ها (بعداً عوضش نکن!)
@@ -65,6 +66,10 @@ def main():
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(cb_back, pattern=r"^admin:back$"))
     selfbot.register(app, ADMIN_IDS)
+    for x in os.environ.get("SUPPORT_IDS", "").replace("،", ",").split(","):
+        x = x.strip()
+        if x.isdigit() and int(x) not in ADMIN_IDS:
+            selfbot.SUPPORT_IDS.add(int(x))
     commerce.setup(app)
     logger.info("selfbot standalone started")
     app.run_polling(allowed_updates=["message", "callback_query", "inline_query"], drop_pending_updates=True)

@@ -43,9 +43,21 @@ class Payment(Base):
     plan = Column(String(20), nullable=False)
     discount = Column(Integer, default=0)
     code = Column(String(32), nullable=True)
+    file_id = Column(String(255), nullable=True)
+    file_kind = Column(String(10), nullable=True)
+    claimed_by = Column(BigInteger, nullable=True)
+    claimed_name = Column(String(64), nullable=True)
     status = Column(String(20), default='pending')
     created = Column(Integer, default=lambda: int(time.time()))
 
+class Ticket(Base):
+    __tablename__ = 'support_tickets'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False)
+    status = Column(String(10), default='open')
+    subject = Column(String(200), nullable=True)
+    created = Column(Integer, default=lambda: int(time.time()))
+    last = Column(Integer, default=lambda: int(time.time()))
 class DiscountCode(Base):
     __tablename__ = 'discount_codes'
     code = Column(String(32), primary_key=True)
@@ -94,6 +106,9 @@ def _migrate_wallet():
                     conn.execute(text('ALTER TABLE diamond_payments ADD COLUMN discount INTEGER DEFAULT 0'))
                 if 'code' not in pcols:
                     conn.execute(text('ALTER TABLE diamond_payments ADD COLUMN code VARCHAR(32)'))
+                for col, ddl in (('file_id', 'VARCHAR(255)'), ('file_kind', 'VARCHAR(10)'), ('claimed_by', 'BIGINT'), ('claimed_name', 'VARCHAR(64)')):
+                    if col not in pcols:
+                        conn.execute(text(f'ALTER TABLE diamond_payments ADD COLUMN {col} {ddl}'))
     except Exception:
         import logging; logging.getLogger(__name__).exception('wallet migration failed')
 
@@ -162,6 +177,7 @@ def home_kb():
         [btn('دعوت دوستان', 'shop:invite'), btn('انتقال الماس', 'shop:transfer')],
         [btn('کد هدیه', 'shop:code', style='success')],
         [btn('آموزش استفاده', 'shop:help'), btn('درباره سلف', 'shop:about')],
+        [btn('تیکت پشتیبانی', 'shop:ticket', style='success')],
         [btn('حساب کاربری', 'shop:dash')],
     ])
 def join_kb():
@@ -316,19 +332,28 @@ def broadcast_ids(audience):
     finally:
         s.close()
 
-async def _broadcast(bot, admin_id, from_chat, msg_id, ids):
+def _bc_kb():
+    n_all=len(broadcast_ids('all')); n_self=len(broadcast_ids('self'))
+    return KB([[B('ارسال به همه کاربران ('+str(n_all)+')',callback_data='adm:bcall')],
+               [B('ارسال به کاربران سلف فعال ('+str(n_self)+')',callback_data='adm:bcself')],
+               [B('➕ افزودن دکمهٔ لینک',callback_data='adm:bclink')],
+               [B('لغو',callback_data='adm:bccancel')]])
+
+async def _broadcast(bot, admin_id, from_chat, msg_id, ids, buttons=None):
+    markup = KB([[B(t_, url=u_)] for t_, u_ in (buttons or [])]) if buttons else None
     ok = fail = 0
     for i in ids:
         try:
-            await bot.copy_message(chat_id=i, from_chat_id=from_chat, message_id=msg_id)
+            await bot.copy_message(chat_id=i, from_chat_id=from_chat, message_id=msg_id, reply_markup=markup)
             ok += 1
         except Exception:
             fail += 1
         await asyncio.sleep(0.06)
-    try:
-        await bot.send_message(admin_id, f'📢 ارسال همگانی تموم شد.\n✅ موفق: {ok}\n❌ ناموفق (ربات رو بلاک کرده یا دسترسی نیست): {fail}')
-    except Exception:
-        pass
+    for rid in {admin_id} | set(selfbot.ADMIN_IDS):
+        try:
+            await bot.send_message(rid, f'📢 ارسال همگانی تموم شد' + ('' if rid == admin_id else f' (فرستنده: {admin_id})') + f'.\n✅ موفق: {ok}\n❌ ناموفق (ربات رو بلاک کرده یا دسترسی نیست): {fail}')
+        except Exception:
+            pass
 
 _CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
@@ -492,35 +517,107 @@ async def callback(update,context):
     elif data=='shop:invite':
         me=await context.bot.get_me(); link=f'https://t.me/{me.username}?start=ref{uid}'
         await show_panel(q, f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:ticket':
+        context.user_data['tk_step']='new'; context.user_data.pop('tk_id',None)
+        await show_panel(q, '🎫 تیکت پشتیبانی\n\nمشکل یا سؤالت رو بفرست؛ متن، عکس، ویس، ویدیو یا فایل، هرچی که لازم داری. برای لغو بنویس «لغو».')
     elif data=='shop:code':
         context.user_data['gift_step']='redeem'; await show_panel(q, '🎁 کد هدیه‌ات رو بفرست (مثل RUBI-XXXXXXXX). برای لغو بنویس «لغو».')
     elif data=='shop:transfer':
         context.user_data['transfer_step']='recipient'; await show_panel(q, 'آیدی عددی گیرنده یا @شناسه کاربری رو بفرست:')
+_pay_msgs = {}   # pid -> [(chat_id, message_id)] پیام‌های رسید پیش پشتیبان‌ها
+
+def pay_caption(pid, uid, username, plan, pct, code, claimed_name=None):
+    final = PRICES.get(plan, 0) * (100 - int(pct or 0)) // 100
+    t = (f'رسید خرید الماس\nکاربر: {uid} (@{username or "ندارد"})\n'
+         f'پلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan == "1" else "۲ ماهه / ۱۸۰۰ الماس"}\n'
+         f'💳 مبلغ باید پرداخت‌شده باشد: {money(final)} تومان' + (f' (با کد {code} — {pct}٪ تخفیف)' if pct else '') +
+         f'\nشناسه پیگیری: {pid}')
+    if claimed_name:
+        t += f'\n🙋 در حال بررسی: {claimed_name}'
+    return t[:1000]
+
+def pay_kb(pid, viewer, claimer, claimer_name):
+    ok_row = [B('تأیید و واریز الماس', callback_data=f'pay:approve:{pid}', style='success'), B('رد درخواست', callback_data=f'pay:reject:{pid}', style='danger')]
+    is_admin = viewer in selfbot.ADMIN_IDS
+    if claimer is None:
+        rows = [[B('🙋 من بررسی می‌کنم', callback_data=f'pay:claim:{pid}', style='primary')]]
+        if is_admin:
+            rows.append(ok_row)
+    elif claimer == viewer:
+        rows = [ok_row]
+    else:
+        rows = [[B(f'🔒 {claimer_name or "یک پشتیبان"} در حال بررسی', callback_data=f'pay:info:{pid}', style='primary')]]
+        if is_admin:
+            rows.append(ok_row)
+    return KB(rows)
+
+async def send_receipt(bot, chat, text, file_id, kind, kb):
+    try:
+        if file_id and kind == 'photo':
+            return await bot.send_photo(chat, file_id, caption=text, reply_markup=kb)
+        if file_id and kind == 'document':
+            return await bot.send_document(chat, file_id, caption=text, reply_markup=kb)
+    except Exception:
+        pass
+    return await bot.send_message(chat, text, reply_markup=kb)
+
+async def _pay_refresh(bot, pid, claimer, claimer_name, done=False):
+    for chat, mid in list(_pay_msgs.get(pid, [])):
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat, message_id=mid, reply_markup=None if done else pay_kb(pid, chat, claimer, claimer_name))
+        except Exception:
+            pass
+    if done:
+        _pay_msgs.pop(pid, None)
+
 async def payment_review(update, context):
     q = update.callback_query
     uid = q.from_user.id
-    if uid not in selfbot.ADMIN_IDS:
+    if not is_staff(uid):
         await q.answer("دسترسی ندارید", show_alert=True)
         return
-    await q.answer()
     parts = (q.data or "").split(":")
     if len(parts) != 3:
-        return
+        await q.answer(); return
     action, pid = parts[1], parts[2]
     try:
         pid = int(pid)
     except ValueError:
-        return
+        await q.answer(); return
     s = get_session()
     try:
-        p = s.get(Payment, pid)
+        p = s.query(Payment).filter(Payment.id == pid).with_for_update().one_or_none()
         if not p:
+            await q.answer()
             await q.edit_message_reply_markup(reply_markup=None)
             await q.message.reply_text("درخواست پرداخت پیدا نشد.")
             return
         if p.status != "pending":
             await q.answer("این درخواست قبلاً بررسی شده است.", show_alert=True)
+            try: await q.edit_message_reply_markup(reply_markup=None)
+            except Exception: pass
             return
+        who = q.from_user.first_name or ('@' + (q.from_user.username or str(uid)))
+        if action == "info":
+            await q.answer(f"{p.claimed_name or 'یک پشتیبان'} این رسید رو برداشته؛ تا اون تموم نکنه نمی‌تونی تأییدش کنی.", show_alert=True)
+            return
+        if action == "claim":
+            if p.claimed_by and p.claimed_by != uid:
+                await q.answer(f"قبلاً {p.claimed_name} این رسید رو برداشته.", show_alert=True)
+                return
+            p.claimed_by = uid; p.claimed_name = who[:60]
+            s.commit()
+            await q.answer("✅ رسید به نام تو ثبت شد.")
+            _pay_msgs.setdefault(pid, [])
+            if (q.message.chat_id, q.message.message_id) not in _pay_msgs[pid]:
+                _pay_msgs[pid].append((q.message.chat_id, q.message.message_id))
+            await _pay_refresh(context.bot, pid, uid, who[:60])
+            return
+        # تأیید/رد: فقط کسی که برداشته (یا ادمین)
+        if uid not in selfbot.ADMIN_IDS and p.claimed_by != uid:
+            await q.answer("اول دکمهٔ «من بررسی می‌کنم» رو بزن (و اگه کس دیگه‌ای برداشته، اون باید تموم کنه).", show_alert=True)
+            return
+        await q.answer()
         if action == "approve":
             amount = Decimal("1000") if p.plan == "1" else Decimal("1800")
             w = s.get(Wallet, p.user_id)
@@ -529,39 +626,229 @@ async def payment_review(update, context):
                 s.add(w)
             w.balance = Decimal(w.balance or 0) + amount
             p.status = "approved"
+            if not p.claimed_by:
+                p.claimed_by = uid; p.claimed_name = who[:60]
             s.commit()
             await context.bot.send_message(p.user_id, f"پرداخت تأیید شد؛ {amount} الماس به حسابت اضافه شد.")
+            await _pay_refresh(context.bot, pid, uid, who, done=True)
             await q.edit_message_reply_markup(reply_markup=None)
             await q.message.reply_text(f"تأیید شد. {amount} الماس به کاربر {p.user_id} اضافه شد.")
         elif action == "reject":
             p.status = "rejected"
+            if not p.claimed_by:
+                p.claimed_by = uid; p.claimed_name = who[:60]
             s.commit()
             try: release_discount(p.user_id, p.code)
             except Exception: pass
-            await context.bot.send_message(p.user_id, "درخواست خرید الماس رد شد. برای بررسی بیشتر با پشتیبانی تماس بگیر.")
+            await context.bot.send_message(p.user_id, "درخواست خرید الماس رد شد. برای بررسی بیشتر از «تیکت پشتیبانی» استفاده کن.")
+            await _pay_refresh(context.bot, pid, uid, who, done=True)
             await q.edit_message_reply_markup(reply_markup=None)
             await q.message.reply_text(f"درخواست #{pid} رد شد.")
     finally:
         s.close()
 
-async def support_panel(update, context):
-    uid = update.effective_user.id
-    if uid not in selfbot.ADMIN_IDS:
+def _tk_kb(tid):
+    return KB([[B('💬 پاسخ', callback_data=f'sup:treply:{tid}', style='primary'), B('✅ بستن تیکت', callback_data=f'sup:tclose:{tid}', style='danger')]])
+
+async def ticket_submit(m, context, u):
+    """پیام کاربر → تیکت (جدید یا ادامهٔ تیکت باز) → کپی برای همهٔ پشتیبان‌ها."""
+    ud = context.user_data
+    tid = ud.get('tk_id')
+    new = False
+    s = get_session()
+    try:
+        t = s.get(Ticket, tid) if tid else None
+        if not t or t.status != 'open' or t.user_id != u.id:
+            t = s.query(Ticket).filter(Ticket.user_id == u.id, Ticket.status == 'open').order_by(Ticket.id.desc()).first()
+        if not t:
+            t = Ticket(user_id=u.id, status='open', subject=((m.text or m.caption or '')[:200] or None)); s.add(t); new = True
+        t.last = int(time.time()); s.commit(); tid = t.id
+    finally:
+        s.close()
+    ud.pop('tk_step', None); ud.pop('tk_id', None)
+    head = (f'🎫 تیکت #{tid} | ' + ('جدید' if new else 'پیام جدید') + f'\nکاربر: {u.id} (@{u.username or "ندارد"}) {u.first_name or ""}')
+    for staff in set(selfbot.ADMIN_IDS) | set(selfbot.SUPPORT_IDS):
+        try:
+            hm = await context.bot.send_message(staff, head, reply_markup=_tk_kb(tid))
+            await context.bot.copy_message(staff, m.chat_id, m.message_id, reply_to_message_id=hm.message_id)
+        except Exception:
+            pass
+    await m.reply_text(f'✅ پیامت برای پشتیبانی رفت (تیکت #{tid}). جواب همین‌جا برات می‌آد.', reply_markup=home_kb())
+
+async def ticket_reply(m, context, tid):
+    s = get_session()
+    try:
+        t = s.get(Ticket, tid)
+        if not t:
+            await m.reply_text('تیکت پیدا نشد.'); return
+        if t.status != 'open':
+            await m.reply_text('این تیکت بسته شده.'); return
+        user_id = t.user_id; t.last = int(time.time()); s.commit()
+    finally:
+        s.close()
+    try:
+        await context.bot.send_message(user_id, f'💬 پاسخ پشتیبانی (تیکت #{tid}):')
+        await context.bot.copy_message(user_id, m.chat_id, m.message_id, reply_markup=KB([[B('✍️ ادامه گفتگو', callback_data=f'tk:more:{tid}', style='primary')]]))
+    except Exception:
+        await m.reply_text('❌ ارسال نشد؛ احتمالاً کاربر ربات رو بلاک کرده.'); return
+    await m.reply_text(f'✅ پاسخ برای تیکت #{tid} ارسال شد.', reply_markup=_tk_kb(tid))
+
+async def tk_cb(update, context):
+    q = update.callback_query
+    parts = (q.data or '').split(':')
+    await q.answer()
+    if len(parts) < 3 or parts[1] != 'more':
+        return
+    try:
+        tid = int(parts[2])
+    except ValueError:
         return
     s = get_session()
     try:
-        pending = s.query(Payment).filter(Payment.status == "pending").order_by(Payment.id.desc()).limit(20).all()
-        lines = ["پنل پشتیبانی", "درخواست‌های پرداخت در انتظار:"]
-        lines += [f"#{p.id} | کاربر {p.user_id} | پلن {p.plan}" for p in pending]
-        if not pending:
-            lines.append("درخواست پرداختی در انتظار نیست.")
-        await update.effective_message.reply_text("\\n".join(lines), reply_markup=KB([[btn("بازگشت به پنل اصلی", "shop:home")]]))
+        t = s.get(Ticket, tid)
+        ok = bool(t and t.user_id == q.from_user.id and t.status == 'open')
+    finally:
+        s.close()
+    if not ok:
+        await q.message.reply_text('این تیکت بسته شده؛ از «تیکت پشتیبانی» توی منو یه تیکت جدید بساز.'); return
+    context.user_data['tk_step'] = 'more'; context.user_data['tk_id'] = tid
+    await q.message.reply_text(f'✍️ پیامت برای تیکت #{tid} رو بفرست (متن، عکس، ویس، ویدیو یا فایل). برای لغو بنویس «لغو».')
+
+def is_staff(uid):
+    return uid in selfbot.ADMIN_IDS or uid in selfbot.SUPPORT_IDS
+
+def sup_kb():
+    return KB([[B('📥 رسیدهای در انتظار',callback_data='sup:pending')],
+               [B('🎫 تیکت‌های باز',callback_data='sup:tickets')],
+               [B('🔎 بررسی کاربر',callback_data='sup:lookup')],
+               [B('📢 پیام همگانی',callback_data='adm:bc')],
+               [B('✖️ بستن',callback_data='sup:close')]])
+
+async def support_panel(update, context):
+    u = update.effective_user
+    if not u or not is_staff(u.id) or update.effective_chat.type != 'private':
+        return
+    context.user_data.pop('sup_step', None)
+    await update.effective_message.reply_text('🛟 پنل پشتیبانی\n\n📥 رسیدها با عکس رسید؛ اول «من بررسی می‌کنم» رو بزن تا کس دیگه‌ای همزمان تأییدش نکنه\n🎫 تیکت‌های کاربران؛ پاسخ با متن، عکس، ویس، ویدیو یا فایل\n🔎 بررسی کاربر با آیدی عددی\n📢 پیام همگانی با هر نوع مدیا', reply_markup=sup_kb())
+
+async def sup_cb(update, context):
+    q = update.callback_query
+    if not is_staff(q.from_user.id):
+        await q.answer('این پنل فقط برای پشتیبانیه.', show_alert=True); return
+    await q.answer()
+    act = (q.data or '').split(':')[1]
+    if act == 'pending':
+        s = get_session()
+        try:
+            rows = s.query(Payment).filter(Payment.status == 'pending').order_by(Payment.id.asc()).limit(10).all()
+            total = s.query(Payment).filter(Payment.status == 'pending').count()
+            items = [(p.id, p.user_id, p.plan, int(p.discount or 0), p.code, p.file_id, p.file_kind, p.claimed_by, p.claimed_name) for p in rows]
+        finally:
+            s.close()
+        if not items:
+            await q.message.reply_text('✅ رسید در انتظاری نیست.'); return
+        chat = q.message.chat_id
+        for pid, uid_, plan, pc, code, fid, fkind, cb_, cn in items:
+            cap = pay_caption(pid, uid_, None, plan, pc, code, cn)
+            sm = await send_receipt(context.bot, chat, cap, fid, fkind, pay_kb(pid, q.from_user.id, cb_, cn))
+            lst = _pay_msgs.setdefault(pid, [])
+            if (chat, sm.message_id) not in lst:
+                lst.append((chat, sm.message_id))
+        if total > len(items):
+            await q.message.reply_text(f'و {total - len(items)} رسید دیگه هم در انتظاره؛ بعد از بررسی این‌ها دوباره بزن.')
+    elif act == 'tickets':
+        s = get_session()
+        try:
+            rows = s.query(Ticket).filter(Ticket.status == 'open').order_by(Ticket.last.asc()).limit(10).all()
+            total = s.query(Ticket).filter(Ticket.status == 'open').count()
+            items = [(t.id, t.user_id, t.subject) for t in rows]
+        finally:
+            s.close()
+        if not items:
+            await q.message.reply_text('✅ تیکت بازی نیست.'); return
+        for tid, uid_, subj in items:
+            await q.message.reply_text(f'🎫 تیکت #{tid} | کاربر {uid_}\n💬 {subj or "[رسانه]"}', reply_markup=_tk_kb(tid))
+        if total > len(items):
+            await q.message.reply_text(f'و {total - len(items)} تیکت باز دیگه هم هست.')
+    elif act == 'treply':
+        context.user_data['sup_step'] = 'treply:' + (q.data.split(':')[2] if len(q.data.split(':')) > 2 else '0')
+        await q.message.reply_text('💬 پاسخت رو بفرست؛ متن (با فرمت تلگرام)، عکس، ویس، ویدیو، فایل… هرچی بفرستی همون‌طور برای کاربر کپی می‌شه. برای لغو بنویس «لغو».')
+    elif act == 'tclose':
+        try:
+            tid = int(q.data.split(':')[2])
+        except Exception:
+            return
+        s = get_session()
+        try:
+            t = s.get(Ticket, tid)
+            if not t or t.status != 'open':
+                await q.message.reply_text('این تیکت قبلاً بسته شده.'); return
+            t.status = 'closed'; s.commit(); user_id = t.user_id
+        finally:
+            s.close()
+        try:
+            await context.bot.send_message(user_id, f'✅ تیکت #{tid} بسته شد. اگه مشکلت ادامه داشت از «تیکت پشتیبانی» یه تیکت جدید بساز.')
+        except Exception:
+            pass
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        await q.message.reply_text(f'✅ تیکت #{tid} بسته شد.')
+    elif act == 'lookup':
+        context.user_data['sup_step'] = 'lookup'
+        await q.message.reply_text('🔎 آیدی عددی کاربر رو بفرست. برای لغو بنویس «لغو».')
+    elif act == 'close':
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+
+def user_info_text(uid):
+    s = get_session()
+    try:
+        w = s.get(Wallet, uid)
+        if not w:
+            return f'کاربر {uid} توی ربات حساب ندارد.'
+        row = selfbot.get_row(uid)
+        pays = s.query(Payment).filter(Payment.user_id == uid).order_by(Payment.id.desc()).limit(3).all()
+        stt = {'pending': '⏳ در انتظار', 'approved': '✅ تأیید', 'rejected': '❌ رد'}
+        ptxt = '\n'.join(f'#{p.id} | پلن {p.plan} | {stt.get(p.status, p.status)}' for p in pays) or 'پرداختی ندارد.'
+        return (f'👤 کاربر {uid}\n💎 موجودی: {fmt_bal(w.balance)} الماس\n🔌 سلف: {"روشن" if w.self_started else "خاموش"}'
+                f'\n🔑 دسترسی: {"فعال" if row and row.enabled else "غیرفعال"} | اتصال: {"زنده" if uid in selfbot._clients else "—"}'
+                f'\n\n🧾 آخرین پرداخت‌ها:\n{ptxt}')
     finally:
         s.close()
 
 async def incoming(update,context):
     m=update.effective_message; u=update.effective_user
     if not m or not u or update.effective_chat.type!='private': return
+    sst=context.user_data.get('sup_step') or ''
+    if sst.startswith('treply:') and is_staff(u.id):
+        if m.text and m.text.strip()=='لغو':
+            context.user_data.pop('sup_step',None); await m.reply_text('لغو شد.'); return
+        context.user_data.pop('sup_step',None)
+        try: tid=int(sst.split(':')[1])
+        except Exception: return
+        await ticket_reply(m,context,tid); return
+    if context.user_data.get('gift_step')=='bc_link' and is_staff(u.id) and m.text:
+        t=m.text.strip(); context.user_data.pop('gift_step',None)
+        btns=[]
+        if t!='لغو':
+            for ln in t.split('\n')[:3]:
+                if '|' in ln:
+                    a_,b_=ln.split('|',1); a_=a_.strip()[:40]; b_=b_.strip()
+                    if a_ and b_.startswith(('http://','https://','tg://','https://t.me/')): btns.append((a_,b_))
+        if btns:
+            context.user_data['bc_btns']=btns
+            await m.reply_text('✅ '+str(len(btns))+' دکمهٔ لینک اضافه شد.',reply_markup=_bc_kb())
+        else:
+            await m.reply_text('دکمه‌ای اضافه نشد (فرمت: متن دکمه | لینک).',reply_markup=_bc_kb())
+        return
+    if context.user_data.get('sup_step')=='lookup' and is_staff(u.id) and m.text:
+        t=selfbot.fa2en(m.text).strip()
+        context.user_data.pop('sup_step',None)
+        if t=='لغو': await m.reply_text('لغو شد.'); return
+        if not t.isdigit(): await m.reply_text('❗️ فقط آیدی عددی بفرست.'); context.user_data['sup_step']='lookup'; return
+        await m.reply_text(user_info_text(int(t)),reply_markup=sup_kb()); return
     if context.user_data.get('gift_step')=='admin_new' and u.id in selfbot.ADMIN_IDS and m.text:
         t=m.text.strip()
         if t=='لغو':
@@ -580,14 +867,17 @@ async def incoming(update,context):
             await m.reply_text('فرمت درست نیست. مثال: 20 10  (۲۰٪ تخفیف، ۱۰ نفر) یا 20 10 72 (با اعتبار ۷۲ ساعته). برای لغو بنویس «لغو».'); return
         code=make_discount(pc,uses,hrs); context.user_data.pop('gift_step',None)
         await m.reply_text(f'🏷 کد تخفیف ساخته شد:\n\n{code}\n\n{pc}٪ تخفیف | 👥 {uses} بار استفاده'+(f' | ⏳ {hrs} ساعت' if hrs else '')+'\nکاربر از «خرید الماس» ← «کد تخفیف» واردش می‌کنه.'); return
-    if gs=='bc_wait' and u.id in selfbot.ADMIN_IDS:
+    if gs=='bc_wait' and is_staff(u.id):
         if m.text and m.text.strip()=='لغو':
             context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
         context.user_data.pop('gift_step',None)
-        context.user_data['bc_msg']=(m.chat_id,m.message_id)
-        n_all=len(broadcast_ids('all')); n_self=len(broadcast_ids('self'))
-        await m.reply_text(f'👆 این پیام برای ارسال همگانی آماده‌ست. به کی بفرستم؟',reply_to_message_id=m.message_id,
-            reply_markup=KB([[B('ارسال به همه کاربران ('+str(n_all)+')',callback_data='adm:bcall')],[B('ارسال به کاربران سلف فعال ('+str(n_self)+')',callback_data='adm:bcself')],[B('لغو',callback_data='adm:bccancel')]])); return
+        context.user_data['bc_msg']=(m.chat_id,m.message_id); context.user_data.pop('bc_btns',None)
+        await m.reply_text('👆 این پیام برای ارسال همگانی آماده‌ست؛ همون‌طور که هست (با فرمت و مدیا) کپی می‌شه. به کی بفرستم؟',reply_to_message_id=m.message_id,reply_markup=_bc_kb()); return
+    if context.user_data.get('tk_step') in ('new','more'):
+        if m.text and m.text.strip()=='لغو':
+            context.user_data.pop('tk_step',None); context.user_data.pop('tk_id',None); await m.reply_text('لغو شد.',reply_markup=home_kb()); return
+        await ticket_submit(m,context,u); return
+    if not (m.text or m.photo or m.document): return
     if not await is_member(context.bot,u.id):
         await m.reply_text('برای استفاده باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
     if gs=='disc' and m.text:
@@ -619,6 +909,7 @@ async def incoming(update,context):
         await m.reply_text(msgs.get(res,'❌ کد معتبر نیست.')); return
     plan=context.user_data.get('payment_plan')
     if plan and (m.photo or m.document):
+        fid=m.photo[-1].file_id if m.photo else m.document.file_id; fkind='photo' if m.photo else 'document'
         s=get_session()
         try:
             dd=context.user_data.get('disc'); pct=0; dcode=None
@@ -626,17 +917,16 @@ async def incoming(update,context):
                 pct=consume_discount(u.id,dd['code'])
                 dcode=dd['code'] if pct else None
                 context.user_data.pop('disc',None)
-            p=Payment(user_id=u.id,plan=plan,status='pending',discount=pct,code=dcode); s.add(p); s.commit(); pid=p.id
+            p=Payment(user_id=u.id,plan=plan,status='pending',discount=pct,code=dcode,file_id=fid,file_kind=fkind); s.add(p); s.commit(); pid=p.id
         finally:s.close()
         context.user_data.pop('payment_plan',None)
         final=PRICES.get(plan,0)*(100-pct)//100
-        recipients=set(selfbot.ADMIN_IDS)
-        recipients.add('@escotch')
-        for admin in recipients:
+        recipients=set(selfbot.ADMIN_IDS)|set(selfbot.SUPPORT_IDS)
+        cap=pay_caption(pid,u.id,u.username,plan,pct,dcode)
+        for staff in recipients:
             try:
-                await context.bot.send_message(admin,f'رسید خرید الماس\nکاربر: {u.id} (@{u.username or "ندارد"})\nپلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan=="1" else "۲ ماهه / ۱۸۰۰ الماس"}\n💳 مبلغ باید پرداخت‌شده باشد: {money(final)} تومان'+(f' (با کد {dcode} — {pct}٪ تخفیف)' if pct else '')+f'\nشناسه پیگیری: {pid}', reply_markup=KB([[btn('تأیید و واریز الماس', f'pay:approve:{pid}', style='success'), btn('رد درخواست', f'pay:reject:{pid}', style='danger')]]))
-                if m.photo: await context.bot.send_photo(admin,m.photo[-1].file_id,caption=f'رسید کاربر {u.id} | پرداخت #{pid}')
-                elif m.document: await context.bot.send_document(admin,m.document.file_id,caption=f'رسید کاربر {u.id} | پرداخت #{pid}')
+                sm=await send_receipt(context.bot,staff,cap,fid,fkind,pay_kb(pid,staff,None,None))
+                _pay_msgs.setdefault(pid,[]).append((staff,sm.message_id))
             except Exception: pass
         await m.reply_text('✅ رسید برای پشتیبانی ارسال شد. بعد از بررسی، الماس‌ها به حسابت اضافه می‌شن.',reply_markup=home_kb()); return
     if context.user_data.get('transfer_step')=='recipient':
@@ -758,24 +1048,33 @@ async def gift_cb(update, context):
 
 async def adm_cb(update, context):
     q=update.callback_query
-    if q.from_user.id not in selfbot.ADMIN_IDS:
+    act=(q.data or '').split(':')[1]
+    if act in ('bc','bcall','bcself','bccancel','bclink'):
+        allowed=is_staff(q.from_user.id)
+    else:
+        allowed=q.from_user.id in selfbot.ADMIN_IDS
+    if not allowed:
         await q.answer('دسترسی نداری.', show_alert=True); return
     await q.answer()
-    act=(q.data or '').split(':')[1]
     if act=='stats':
         await q.message.reply_text(stats_text())
     elif act=='bc':
         context.user_data['gift_step']='bc_wait'
-        await q.message.reply_text('📢 اطلاعیهٔ همگانی\n\nپیامت رو بفرست (متن، عکس، فایل… هرچی؛ همون‌طور که هست برای کاربران کپی می‌شه). برای لغو بنویس «لغو».')
+        await q.message.reply_text('📢 پیام همگانی\n\nپیامت رو بفرست؛ هر نوعی که باشه همون‌طور برای کاربران کپی می‌شه:\n• متن با فرمت تلگرام: بولد، ایتالیک، زیرخط، خط‌خورده، کد، اسپویلر، نقل‌قول و لینک\n• عکس، ویدیو، گیف، ویس، آهنگ، ویدیو مسیج، فایل یا استیکر (با کپشن)\nبعدش می‌تونی دکمهٔ لینک هم اضافه کنی. برای لغو بنویس «لغو».')
     elif act in ('bcall','bcself'):
         ref=context.user_data.pop('bc_msg',None)
         if not ref:
             await q.message.reply_text('پیامی برای ارسال نیست؛ دوباره از منوی ادمین شروع کن.'); return
         ids=broadcast_ids('all' if act=='bcall' else 'self')
         await q.message.reply_text(f'⏳ ارسال برای {len(ids)} نفر شروع شد؛ بعد از پایان گزارش می‌فرستم.')
-        context.application.create_task(_broadcast(context.bot,q.from_user.id,ref[0],ref[1],ids))
+        context.application.create_task(_broadcast(context.bot,q.from_user.id,ref[0],ref[1],ids,context.user_data.pop('bc_btns',None)))
+    elif act=='bclink':
+        if not context.user_data.get('bc_msg'):
+            await q.message.reply_text('اول پیام همگانی رو بفرست.'); return
+        context.user_data['gift_step']='bc_link'
+        await q.message.reply_text('➕ دکمهٔ لینک رو این‌طوری بفرست (تا ۳ خط):\nمتن دکمه | https://example.com')
     elif act=='bccancel':
-        context.user_data.pop('bc_msg',None); await q.message.reply_text('ارسال همگانی لغو شد.')
+        context.user_data.pop('bc_msg',None); context.user_data.pop('bc_btns',None); await q.message.reply_text('ارسال همگانی لغو شد.')
     elif act=='dnew':
         context.user_data['gift_step']='disc_new'
         await q.message.reply_text('🏷 ساخت کد تخفیف\n\nدرصد و تعداد دفعات استفاده رو بفرست:\n20 10  ← ۲۰٪ تخفیف برای ۱۰ نفر\n20 10 72  ← با اعتبار ۷۲ ساعته\nبرای لغو بنویس «لغو».')
@@ -828,9 +1127,11 @@ def setup(app):
     app.add_handler(CallbackQueryHandler(balance_cb, pattern=r'^bal:'), group=-11)
     app.add_handler(CallbackQueryHandler(gift_cb, pattern=r'^gift:'), group=-20)
     app.add_handler(CallbackQueryHandler(adm_cb, pattern=r'^adm:'), group=-20)
+    app.add_handler(CallbackQueryHandler(sup_cb, pattern=r'^sup:'), group=-20)
+    app.add_handler(CallbackQueryHandler(tk_cb, pattern=r'^tk:'), group=-20)
     app.add_handler(CommandHandler('start',start),group=-10)
-    app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject):'), group=-20)
+    app.add_handler(CallbackQueryHandler(payment_review, pattern=r'^pay:(approve|reject|claim|info):'), group=-20)
     app.add_handler(CommandHandler('support', support_panel), group=-10)
     app.add_handler(CallbackQueryHandler(callback,pattern=r'^shop:'),group=-10)
-    app.add_handler(MessageHandler((filters.TEXT|filters.PHOTO|filters.Document.ALL)&filters.ChatType.PRIVATE, incoming),group=-10)
+    app.add_handler(MessageHandler((~filters.COMMAND)&filters.ChatType.PRIVATE, incoming),group=-10)
     app.job_queue.run_repeating(charge_job, interval=300, first=60, name='diamond-hourly-charges')
