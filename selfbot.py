@@ -963,7 +963,8 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "ترجمه": "translate", "translate": "translate",
         "تگ": "tag", "tag": "tag", "ریاکشن": "react", "واکنش": "react",
         "react": "react", "reykt": "react", "reaction": "react",
-        "ذخیره": "save", "save": "save"}
+        "ذخیره": "save", "save": "save",
+        "کپی": "copy", "copy": "copy", "غیرفعال": "off", "غیر‌فعال": "off", "off": "off"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1133,9 +1134,9 @@ async def _handle_dot(uid, ev):
         import extras
         await _say(uid, ev, await extras.save_replied(uid, ev))
         return True
-    # تنظیمات سلف فقط از دکمه‌های .پنل انجام می‌شوند؛ فرمان‌های قدیمی تنظیم
-    # کلمه/زمان/گپ/دکمه/کپی/ساعت در چت‌ها دیگر تنظیمات را تغییر نمی‌دهند.
-    if cmd != "panel":
+    # تنظیمات سلف (کلمه/زمان/گپ/دکمه/ساعت) فقط از دکمه‌های .پنل انجام می‌شوند؛
+    # فقط .کپی و .غیرفعال کپی چون به ریپلای نیاز دارن توی چت کار می‌کنن.
+    if cmd not in ("panel", "copy", "off"):
         try:
             await ev.delete()
         except Exception:
