@@ -16,7 +16,7 @@ import re
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle,
                       InputTextMessageContent, MessageEntity)
-from telegram.ext import ApplicationHandlerStop, ChosenInlineResultHandler, InlineQueryHandler
+from telegram.ext import ApplicationHandlerStop, ChosenInlineResultHandler, InlineQueryHandler, MessageHandler, filters
 
 logger = logging.getLogger("premium_emoji")
 
@@ -78,6 +78,7 @@ async def on_inline(update, context):
 async def on_chosen(update, context):
     cr = update.chosen_inline_result
     imid = cr.inline_message_id
+    logger.info("premium emoji chosen: id=%s inline_message_id=%s", cr.result_id, bool(imid))
     if not imid or not cr.result_id.startswith("pe:"):
         return
     built = await _build(context.bot, cr.query or "")
@@ -96,6 +97,21 @@ async def on_chosen(update, context):
             pass
 
 
+async def on_private(update, context):
+    """پیوی ربات: متن با [کد] بفرست، ربات همون متن رو با ایموجی پرمیوم جواب می‌ده (بعد فوروارد کن)."""
+    m = update.effective_message
+    built = await _build(context.bot, m.text or "")
+    if not built:
+        return
+    text, ents, bad = built
+    if bad:
+        await m.reply_text("❌ کد ایموجی معتبر نیست: " + bad)
+    else:
+        await m.reply_text(text, entities=ents)
+        logger.info("premium emoji private reply sent")
+    raise ApplicationHandlerStop
+
+
 async def on_wait(update, context):
     await update.callback_query.answer()
     raise ApplicationHandlerStop
@@ -105,4 +121,5 @@ def register(app):
     from telegram.ext import CallbackQueryHandler
     app.add_handler(InlineQueryHandler(on_inline), group=-6)
     app.add_handler(ChosenInlineResultHandler(on_chosen), group=-6)
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & filters.Regex(_RE.pattern), on_private), group=-6)
     app.add_handler(CallbackQueryHandler(on_wait, pattern=r"^pe:wait$"), group=-6)
