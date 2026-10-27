@@ -971,7 +971,6 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "بلاک": "block", "block": "block", "آنبلاک": "unblock", "unblock": "unblock", "رفع": "undo",
         "حساب": "calc", "محاسبه": "calc", "ماشینحساب": "calc", "calc": "calc",
         "قیمت": "price", "price": "price", "تاریخ": "date", "date": "date",
-        "اذان": "prayer", "اوقات": "prayer", "azan": "prayer", "prayer": "prayer",
         "کوتاه": "short", "کوتاهکن": "short", "short": "short", "shorten": "short",
         "استوری": "story", "story": "story"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
@@ -1040,10 +1039,6 @@ def _panel_text(uid):
              f"🔌 اتصال: {'✅ وصل' if on else '❌ قطع'}   ⚙️ وضعیت: {'⏸ متوقف' if row and row.paused else '▶️ فعال'}", ""]
     for i in range(MAX_SLOTS):
         lines.append(_slot_line(i, sl[i] if i < len(sl) else {}))
-    lines += ["",
-              "تمام تنظیمات سلف از همین پنل انجام می‌شود؛ فرمان‌های تنظیم پراکنده غیرفعال شده‌اند.",
-              "ترجمه: روی متن ریپلای کن و .ترجمه را بفرست. تگ محدود اعضا: .تگ اعضا.",
-              "بعد از ذخیره تنظیمات در پنل، قابلیت‌های انتخاب‌شده اجرا می‌شوند."]
     return "\n".join(lines)
 
 
@@ -1350,27 +1345,6 @@ _FONT_MAPS = {
     "مونو": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝙰𝙱𝙲𝙳𝙴𝙵𝙶𝙷𝙸𝙹𝙺𝙻𝙼𝙽𝙾𝙿𝚀𝚁𝚂𝚃𝚄𝚅𝚆𝚇𝚈𝚉𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣"),
 }
 
-def _feature_panel(uid):
-    d = _pget(uid)
-    def status(k): return "روشن" if d.get(k) else "خاموش"
-    target = d.get("typing_target_name") or "انتخاب نشده"
-    rows = [
-        [B("همیشه آنلاین: " + status("always_online"), callback_data="self:ft:always_online")],
-        [B("تایپینگ: " + status("typing_mode"), callback_data="self:ft:typing_mode")],
-        [B("انتخاب گپ تایپینگ", callback_data="self:typing_chats")],
-        [B("حذف مقصد تایپینگ", callback_data="self:typing_clear")],
-        [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts")],
-        [B("راهنمای ترجمه", callback_data="self:translate_help")],
-        [B("راهنمای تگ اعضا", callback_data="self:tag_help")],
-        [B("بازگشت", callback_data="self:home")],
-    ]
-    return ("<b>تنظیمات تکمیلی</b>\n\n"
-            "<b>همیشه آنلاین:</b> در زمان اتصال سلف، وضعیت آنلاین هر ۲ دقیقه تازه‌سازی می‌شود؛ محدودیت‌های سمت تلگرام همچنان ممکن است اثر بگذارند.\n"
-            f"<b>مقصد تایپینگ:</b> {target}\n"
-            "با روشن‌بودن تایپینگ، وقتی در گفت‌وگوهای اکانت فعالیت تایپ دیده شود، وضعیت تایپ برای مدت کوتاه در مقصد انتخابی نمایش داده می‌شود.\n"
-            "<b>ترجمه:</b> روی پیام موردنظر ریپلای کن و بنویس <code>.ترجمه</code>.\n"
-            "<b>حالت متن:</b> روی پیام‌های بعدی اعمال می‌شود؛ برای فارسی از قالب‌بندی تلگرام استفاده می‌شود."), KB(rows)
-
 async def _translate_text(text):
     # Google Translate endpoint; requires server internet access.
     import urllib.parse, urllib.request, json as _json
@@ -1564,10 +1538,6 @@ async def cb_user(update, context):
         if name in _FONT_MAPS:
             d = _pget(uid); d["font_mode"] = name; _pput(uid, d)
         await home()
-    elif a == "translate_help":
-        await qm.edit_text("برای ترجمه، در اکانت متصل روی پیام متنی ریپلای کن و بنویس .ترجمه\nترجمه به فارسی انجام می‌شود و به اینترنت سرور نیاز دارد.", reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
-    elif a == "tag_help":
-        await qm.edit_text("برای تگ محدود اعضا در گروه بنویس .تگ اعضا\nبرای جلوگیری از اسپم، در هر اجرا حداکثر ۱۰ عضو منشن می‌شوند. ممکن است تلگرام دسترسی یا اطلاعات بعضی اعضا را محدود کند.", reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
     elif a == "clk":
         tx, kb = _clock_panel(uid)
         await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
@@ -1911,22 +1881,51 @@ async def on_contact(update, context):
 _banner = {"file_id": None}
 _panel_msg = {}     # uid -> (chat_id, message_id) آخرین پنلی که فرستاده شده
 
-CMDS_TEXT = (
-    "› دستورات سلف\n\n"
-    "پنل  ← همین پنل\n"
-    ".کلمه فلان  ← کلمه‌ی اسلات\n"
-    ".زمان 10s  ← تایمر\n"
-    ".دکمه چپ | وسط | راست | خالی\n"
-    ".گپ  ← همین گپ (یا .گپ اسم گروه)\n"
-    ".ساعت  ← ساعت زنده کنار اسم\n"
-    ".کپی  ← (ریپلای) کپی پروفایل | .غیرفعال کپی\n"
-    ".ذخیره  ← (ریپلای روی مدیا) ذخیره توی Saved Messages\n"
-    ".ایموجی متن  ← ایموجی پریمیوم\n"
-    ".ریاکشن 🔥❤👍  ← (ریپلای) تا ۳ ریاکشن روی همون پیام\n"
-    ".حساب 2+2 | .قیمت دلار | .تاریخ | .اذان | .کوتاه لینک\n"
-    ".استوری  ← ذخیرهٔ استوری | .سکوت / .بلاک  ← (ریپلای)\n"
-    "راهنمای کامل: پنل ← امکانات بیشتر ← صفحهٔ بعد"
+# هر ردیف: (متنی که با لمس دکمه کپی می‌شه، برچسب دکمه = اسم + توضیح). توضیح‌ها داخل خود دکمه‌ان.
+CMD_ITEMS = (
+    (".پنل", "پنل — باز کردن همین پنل"),
+    (".ساعت", "ساعت — ساعت زنده کنار اسم"),
+    (".غیرفعال ساعت", "غیرفعال ساعت — خاموش‌کردن ساعت"),
+    (".کپی", "کپی پروفایل — ریپلای روی پیام کاربر"),
+    (".غیرفعال کپی", "غیرفعال کپی — توقف کپی پروفایل"),
+    (".ذخیره", "ذخیره — ریپلای روی مدیا؛ می‌ره Saved Messages"),
+    (".ایموجی ", "ایموجی — ایموجی پریمیوم؛ بعدش متن بنویس"),
+    (".ریاکشن ", "ریاکشن — ریپلای؛ تا ۳ ریاکشن"),
+    (".ترجمه", "ترجمه — ریپلای روی متن؛ ترجمهٔ فارسی"),
+    (".تگ اعضا", "تگ اعضا — منشن حداکثر ۱۰ عضو"),
+    (".حساب ", "حساب — ماشین‌حساب مثل .حساب 25*4+10"),
+    (".قیمت ", "قیمت — دلار، طلا، سکه، ارز دیجیتال"),
+    (".تاریخ", "تاریخ — شمسی، میلادی، قمری"),
+    (".کوتاه ", "کوتاه — کوتاه‌کردن لینک (یا ریپلای)"),
+    (".استوری", "استوری — ذخیرهٔ استوری (ریپلای یا لینک)"),
+    (".سکوت", "سکوت — ریپلای روی کاربر"),
+    (".رفع سکوت", "رفع سکوت — برداشتن سکوت"),
+    (".بلاک", "بلاک — ریپلای روی کاربر"),
+    (".رفع بلاک", "رفع بلاک — برداشتن بلاک"),
 )
+CMDS_PER_PAGE = 8
+
+
+def _copy_btn(label, copy):
+    """دکمه‌ای که با لمس، متن «copy» رو توی کلیپ‌بورد کپی می‌کنه (copy_text در Bot API)."""
+    return _IKB(_clean(label), api_kwargs={"style": "primary", "copy_text": {"text": copy}})
+
+
+def cmds_panel(page=1):
+    pages = max(1, -(-len(CMD_ITEMS) // CMDS_PER_PAGE))
+    page = min(max(int(page or 1), 1), pages)
+    chunk = CMD_ITEMS[(page - 1) * CMDS_PER_PAGE: page * CMDS_PER_PAGE]
+    rows = [[_copy_btn(lbl, cp)] for cp, lbl in chunk]
+    nav = []
+    if page > 1:
+        nav.append(B("◀ قبلی", callback_data=f"selfi:cmds:{page - 1}", style="primary"))
+    if page < pages:
+        nav.append(B("بعدی ▶", callback_data=f"selfi:cmds:{page + 1}", style="success"))
+    if nav:
+        rows.append(nav)
+    rows.append([B("بازگشت", callback_data="self:home", style="primary")])
+    rows.append([B("بستن پنل", callback_data="selfi:close", style="danger")])
+    return f"› دستورات سلف ({page}/{pages})\nروی هر دکمه بزن تا دستورش کپی بشه.", KB(rows)
 
 
 def _make_banner():
@@ -2014,8 +2013,6 @@ def _inl_kb(uid, private=False):
         trow.append(B("حذف مقصد", callback_data="self:typing_clear", style="danger"))
     rows.insert(3, trow)
     rows.insert(4, [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts", style="primary")])
-    rows.insert(5, [B("راهنمای ترجمه", callback_data="self:translate_help", style="primary"),
-                    B("راهنمای تگ اعضا", callback_data="self:tag_help", style="primary")])
     rows.append([B("امکانات بیشتر", callback_data="self:more", style="success")])
     last = [B("دستورات سلف", callback_data="selfi:cmds", style="primary")]
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
@@ -2178,11 +2175,12 @@ async def cb_inline(update, context):
                 pass
     elif a == "cmds" and (imid or q.message):
         await q.answer()
+        ctx_tx, ctx_kb = cmds_panel(p[2] if len(p) > 2 and p[2].isdigit() else 1)
         if imid:
-            await _inl_edit(bot, imid, CMDS_TEXT, _inl_back_kb())
+            await _inl_edit(bot, imid, ctx_tx, ctx_kb)
         else:
             tgt = _PhotoMsg(q.message) if getattr(q.message, "photo", None) else q.message
-            await tgt.edit_text(CMDS_TEXT, reply_markup=_inl_back_kb())
+            await tgt.edit_text(ctx_tx, reply_markup=ctx_kb)
     elif a == "react" and imid:
         await q.answer()
         kb = KB([[B("قلب", callback_data="selfi:r:h", style="danger"), B("آتش", callback_data="selfi:r:f", style="danger"),

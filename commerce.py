@@ -17,8 +17,10 @@ SUPPORT = '@escotch'
 CARD = '6219 8618 5116 0068'
 OWNER = 'ظریفی'
 ACTIVATE_COST = 5
-# دورهٔ رایگان ۳ روزه به‌صورت پیش‌فرض خاموشه (بدون الماس سلف فعال نمی‌شه). برای روشن‌کردنش: SELF_TRIAL=1
-TRIAL_ENABLED = os.environ.get('SELF_TRIAL', '').strip().lower() in ('1', 'true', 'yes')
+# دورهٔ رایگان ۷ روزه: کاربری که ربات رو استارت کنه و عضو کانال‌ها بشه، ۷ روز بدون کسر الماس از سلف استفاده می‌کنه.
+# پیش‌فرض روشنه؛ برای خاموش‌کردنش توی Railway بذار SELF_TRIAL=0
+TRIAL_DAYS = 7
+TRIAL_ENABLED = os.environ.get('SELF_TRIAL', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 _EMOJI_RE = __import__('re').compile("[\U0001F000-\U0001FFFF\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\uFE0F\u200d]")
 def B(text, *args, **kwargs):
@@ -113,7 +115,7 @@ def _migrate_wallet():
         import logging; logging.getLogger(__name__).exception('wallet migration failed')
 
 def start_trial(uid):
-    """Start the 72-hour trial once, only after required-channel membership is verified."""
+    """Start the 7-day trial once, only after required-channel membership is verified."""
     now = int(time.time())
     s = get_session()
     try:
@@ -123,7 +125,7 @@ def start_trial(uid):
             s.add(w)
         if not w.trial_used:
             w.trial_used = True
-            w.trial_until = now + 3 * 24 * 60 * 60
+            w.trial_until = now + TRIAL_DAYS * 24 * 60 * 60
             s.commit()
             selfbot.save_row(uid, enabled=True)
             return w.trial_until, True
@@ -452,7 +454,7 @@ async def start(update,context):
                 await context.bot.send_message(wref, f'{u.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
         except Exception:
             pass
-    trial_msg = '\n🎁 دورهٔ رایگان سلفت به مدت ۳ روز شروع شد.' if trial_new else ''
+    trial_msg = '\n🎁 دورهٔ رایگان سلفت به مدت ۷ روز شروع شد؛ توی این مدت الماسی کسر نمی‌شه.' if trial_new else ''
     await update.effective_message.reply_text(welcome_text(u.first_name or '', wallet(u.id)['balance']) + trial_msg, reply_markup=home_kb())
 async def show_panel(q, text, **kwargs):
     try:
@@ -474,7 +476,7 @@ async def callback(update,context):
                     await context.bot.send_message(wref, f'{q.from_user.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
             except Exception:
                 pass
-        note = '\n🎁 دورهٔ رایگان ۳ روزه شروع شد.' if trial_new else ''
+        note = '\n🎁 دورهٔ رایگان ۷ روزه شروع شد؛ توی این مدت الماسی کسر نمی‌شه.' if trial_new else ''
         await show_panel(q, '✅ عضویتت تأیید شد!\n\n' + welcome_text(q.from_user.first_name or '', wallet(uid)['balance']) + note,reply_markup=home_kb()); return
     if not await is_member(context.bot,uid):
         await show_panel(q, 'برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
@@ -969,10 +971,11 @@ async def charge_job(context):
             if getattr(w, 'trial_until', None) and now >= w.trial_until:
                 w.trial_until = None
                 w.self_started = False
+                w.last_charge = now
                 try:
                     selfbot.save_row(w.user_id, enabled=False)
                     context.application.create_task(selfbot.stop_client(w.user_id, restore=True))
-                    context.application.create_task(context.bot.send_message(w.user_id, 'دورهٔ رایگان ۳ روزه تموم شد و سلف به‌صورت خودکار قطع شد. برای ادامه، الماس تهیه کن.'))
+                    context.application.create_task(context.bot.send_message(w.user_id, 'دورهٔ رایگان ۷ روزه تموم شد و سلف به‌صورت خودکار قطع شد. برای ادامه، الماس تهیه کن.'))
                 except Exception:
                     pass
             # عضویت اجباری: اگر کاربر بعد از دریافت پاداش معرفی از کانال‌ها خارج شود، پاداش ۵۰ الماسی برگردانده می‌شود.
@@ -989,7 +992,8 @@ async def charge_job(context):
                 try: context.application.create_task(context.bot.send_message(w.user_id,'⚠️ از یکی از کانال‌های عضویت اجباری خارج شدی؛ ۵۰ الماس پاداش دعوتت کسر شد. دوباره عضو شو.',reply_markup=join_kb()))
                 except Exception: pass
             if trial_active:
-                # No diamond deductions during the 72-hour free period.
+                # No diamond deductions during the 7-day free period (ساعت شارژ هم جلو می‌رود تا بعد از پایان دوره بابت این مدت کسر نشود).
+                w.last_charge = now
                 continue
             last=w.last_charge or now; hours=(now-last)//3600
             if hours<=0: continue

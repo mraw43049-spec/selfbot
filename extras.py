@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """امکانات بیشتر سلف: پاسخ خودکار، پیام‌های حذف/ویرایش‌شده، ذخیره مدیای تایمردار،
-منشن‌گیر، ناظر کلمه/کاربر، سکوت/بلاک سریع و دستورهای ابزار (حساب، قیمت، تاریخ، اذان، کوتاه‌کن لینک، استوری).
+منشن‌گیر، ناظر کلمه/کاربر، سکوت/بلاک سریع و دستورهای ابزار (حساب، قیمت، تاریخ، کوتاه‌کن لینک، استوری).
 تنظیمات هر کاربر داخل همان JSON پروفایل (sb._pget/_pput) ذخیره می‌شود."""
 import asyncio
 import io
@@ -28,21 +28,9 @@ MU_MAX = 30                   # حداکثر کاربر ساکت‌شده
 TOOL_PER_MIN = 20             # سقف دستورهای ابزار در دقیقه (برای جلوگیری از فشار به سرویس‌های بیرونی)
 
 TOGGLES = ("ar_on", "del_on", "ttl_on", "mn_on", "wl_on", "mu_on")
-CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del", "city", "thelp")
-TEXT_STEPS = ("ar_text", "wl_add", "mu_add", "city")
-CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "prayer", "short", "story")
-
-TOOLS_HELP = (
-    "› راهنمای ابزارها\n\n"
-    ".حساب 25*4+10  ← ماشین‌حساب (یا ریپلای روی پیام)\n"
-    ".قیمت  ← خلاصه | .قیمت دلار / یورو / طلا / سکه / بیتکوین ...\n"
-    ".تاریخ  ← شمسی/میلادی/قمری | .تاریخ 1405/8/5 ← تبدیل\n"
-    ".اذان  ← اوقات شرعی شهر پیش‌فرض | .اذان مشهد\n"
-    ".کوتاه لینک  ← کوتاه‌کردن لینک (یا ریپلای روی پیام لینک‌دار)\n"
-    ".استوری  ← (ریپلای روی استوری، یا با لینک t.me/user/s/1) ذخیره توی Saved Messages\n"
-    ".سکوت  ← (ریپلای) ساکت‌کردن کاربر | .سکوت خاموش\n"
-    ".بلاک  ← (ریپلای) بلاک تلگرامی | .رفع بلاک"
-)
+CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del")
+TEXT_STEPS = ("ar_text", "wl_add", "mu_add")
+CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story")
 
 _cache = {}      # uid -> OrderedDict[msg_id -> rec]
 _ar_seen = {}    # uid -> {sender_id: ts}
@@ -313,46 +301,43 @@ def _st(d, k):
     return "روشن" if d.get(k) else "خاموش"
 
 
+MORE_ROWS_PER_PAGE = 8
+
+
 def more_panel(uid, page=1):
-    """«امکانات بیشتر»؛ صفحهٔ ۱: امکانات قبلی — صفحهٔ ۲: سکوت، شهر اذان و راهنمای ابزارها."""
+    """«امکانات بیشتر»؛ همهٔ دکمه‌ها یک‌جا و توضیح هر امکان داخل خود دکمه است.
+    اگه ردیف‌ها از MORE_ROWS_PER_PAGE بیشتر شد، خودکار می‌ره صفحهٔ بعد."""
     d = sb._pget(uid)
     B, KB = sb.B, sb.KB
-    note = "" if uid in sb._clients else "⚠️ اکانت وصل نیست؛ این امکانات بعد از اتصال کار می‌کنن.\n\n"
+    note = "" if uid in sb._clients else "⚠️ اکانت وصل نیست؛ بعد از اتصال کار می‌کنن.\n\n"
+    wl = d.get("wl_items") or []
+    mu = d.get("mu_ids") or {}
 
     def t(k, label):
         return B(f"{label}: {_st(d, k)}", callback_data=f"self:mt:{k}:{page}", style="success" if d.get(k) else "primary")
 
-    if page == 2:
-        mu = d.get("mu_ids") or {}
-        tx = (note + "› امکانات بیشتر (۲/۲)\n\n"
-              f"🔇 سکوت: {_st(d, 'mu_on')} — {len(mu)} نفر؛ پیام‌های جدیدشان در پی‌وی از سمت تو پاک می‌شود (.سکوت با ریپلای)\n"
-              f"🕌 شهر پیش‌فرض اذان: {d.get('city') or 'تهران'}\n"
-              "🧰 ابزارها: .حساب  .قیمت  .تاریخ  .اذان  .کوتاه  .استوری  .بلاک")
-        kb = KB([
-            [t("mu_on", "سکوت"), B("مدیریت سکوت", callback_data="self:mu", style="primary")],
-            [B("شهر اذان: " + (d.get("city") or "تهران"), callback_data="self:city", style="primary"),
-             B("راهنمای ابزارها", callback_data="self:thelp", style="primary")],
-            [B("◀ صفحهٔ قبل", callback_data="self:more:1", style="primary"),
-             B("بازگشت", callback_data="self:home", style="primary")],
-        ])
-        return tx[:1000], kb
-
-    wl = d.get("wl_items") or []
-    tx = (note + "› امکانات بیشتر (۱/۲)\n\n"
-          f"🤖 پاسخ خودکار: {_st(d, 'ar_on')} — به پی‌وی‌ها (هر نفر حداکثر هر ۶ ساعت یک‌بار) جواب می‌ده\n"
-          f"🗑 حذف/ویرایش: {_st(d, 'del_on')} — پیام پاک‌شده یا ویرایش‌شدهٔ پی‌وی‌ها رو برات می‌فرسته\n"
-          f"⏱ مدیای تایمردار: {_st(d, 'ttl_on')} — عکس/ویدیوی یک‌بارمصرف خودکار توی Saved Messages ذخیره می‌شه (دستی: ریپلای + .ذخیره)\n"
-          f"📣 منشن‌گیر: {_st(d, 'mn_on')} — هر تگ توی گروه‌ها با لینک پیام خبرت می‌کنه\n"
-          f"👁 ناظر: {_st(d, 'wl_on')} — {len(wl)} مورد (کلمه، @یوزرنیم یا آیدی عددی)")
-    kb = KB([
-        [t("ar_on", "پاسخ خودکار"), B("متن پاسخ", callback_data="self:ar_text", style="primary")],
-        [t("del_on", "حذف/ویرایش"), t("ttl_on", "مدیای تایمردار")],
-        [t("mn_on", "منشن‌گیر"), t("wl_on", "ناظر")],
-        [B("مدیریت ناظر", callback_data="self:wl", style="primary")],
-        [B("صفحهٔ بعد ▶", callback_data="self:more:2", style="success")],
-        [B("بازگشت", callback_data="self:home", style="primary")],
-    ])
-    return tx[:1000], kb
+    items = [
+        [t("ar_on", "پاسخ خودکار پی‌وی"), B("متن پاسخ", callback_data="self:ar_text", style="primary")],
+        [t("del_on", "خبر حذف/ویرایش پی‌وی")],
+        [t("ttl_on", "ذخیرهٔ مدیای تایمردار")],
+        [t("mn_on", "خبر منشن در گروه‌ها")],
+        [t("wl_on", f"ناظر کلمه/آیدی ({len(wl)})"), B("مدیریت ناظر", callback_data="self:wl", style="primary")],
+        [t("mu_on", f"سکوت پی‌وی ({len(mu)} نفر)"), B("مدیریت سکوت", callback_data="self:mu", style="primary")],
+        [B("دستورات سلف (کپی با یک لمس)", callback_data="selfi:cmds", style="primary")],
+    ]
+    pages = max(1, -(-len(items) // MORE_ROWS_PER_PAGE))
+    page = min(max(int(page or 1), 1), pages)
+    rows = items[(page - 1) * MORE_ROWS_PER_PAGE: page * MORE_ROWS_PER_PAGE]
+    nav = []
+    if page > 1:
+        nav.append(B("◀ صفحهٔ قبل", callback_data=f"self:more:{page - 1}", style="primary"))
+    if page < pages:
+        nav.append(B("صفحهٔ بعد ▶", callback_data=f"self:more:{page + 1}", style="success"))
+    if nav:
+        rows.append(nav)
+    rows.append([B("بازگشت", callback_data="self:home", style="primary")])
+    tx = note + "› امکانات بیشتر" + (f" ({page}/{pages})" if pages > 1 else "")
+    return tx, KB(rows)
 
 
 def wl_panel(uid):
@@ -365,7 +350,7 @@ def wl_panel(uid):
     rows = [[B(f"🗑 {it[:40]}", callback_data=f"self:wl_del:{i}", style="danger")] for i, it in enumerate(items)]
     if len(items) < WL_MAX:
         rows.append([B("افزودن مورد", callback_data="self:wl_add", style="success")])
-    rows.append([B("بازگشت", callback_data="self:more", style="primary")])
+    rows.append([B("بازگشت", callback_data="self:more:1", style="primary")])
     return tx, KB(rows)
 
 
@@ -382,7 +367,7 @@ def mu_panel(uid):
     rows = [[B(f"🔇 {name[:30]}", callback_data=f"self:mu_del:{tid}", style="danger")] for tid, name in ids.items()]
     if len(ids) < MU_MAX:
         rows.append([B("افزودن کاربر", callback_data="self:mu_add", style="success")])
-    rows.append([B("بازگشت", callback_data="self:more:2", style="primary")])
+    rows.append([B("بازگشت", callback_data="self:more:1", style="primary")])
     return tx[:1000], KB(rows)
 
 
@@ -391,7 +376,7 @@ async def handle_cb(uid, a, p, qm, context):
     B, KB = sb.B, sb.KB
     if a == "more":
         page = int(p[2]) if len(p) > 2 and p[2].isdigit() else 1
-        tx, kb = more_panel(uid, 2 if page == 2 else 1)
+        tx, kb = more_panel(uid, page)
         await qm.edit_text(tx, reply_markup=kb)
     elif a == "mt":
         key = p[2] if len(p) > 2 else ""
@@ -402,7 +387,7 @@ async def handle_cb(uid, a, p, qm, context):
             if key == "ar_on" and d[key] and not d.get("ar_text"):
                 d["ar_text"] = DEFAULT_AR
             sb._pput(uid, d)
-        tx, kb = more_panel(uid, 2 if page == 2 else 1)
+        tx, kb = more_panel(uid, page)
         await qm.edit_text(tx, reply_markup=kb)
     elif a == "ar_text":
         ud["self_st"] = {"step": "ar_text"}
@@ -440,12 +425,6 @@ async def handle_cb(uid, a, p, qm, context):
         sb._pput(uid, d)
         tx, kb = mu_panel(uid)
         await qm.edit_text(tx, reply_markup=kb)
-    elif a == "city":
-        ud["self_st"] = {"step": "city"}
-        await context.bot.send_message(uid, "اسم شهر رو بفرست؛ شهرهای پشتیبانی‌شده:\n" + "، ".join(tools.CITY_NAMES)
-                                       + "\n\nبرای لغو بنویس «لغو».")
-    elif a == "thelp":
-        await qm.edit_text(TOOLS_HELP, reply_markup=KB([[B("بازگشت", callback_data="self:more:2", style="primary")]]))
 
 
 async def _mu_add_text(uid, text):
@@ -517,15 +496,6 @@ async def handle_text(uid, st, text, msg, context):
         await msg.reply_text(f"✅ {added} نفر ساکت شد." if added
                              else "موردی اضافه نشد (پیدا نشد، تکراری، سقف پر، یا اکانت سلف وصل نیست).")
         panel = (mu_panel, (uid,))
-    elif step == "city":
-        name = tools.find_city(text)
-        if name:
-            d["city"] = name
-            sb._pput(uid, d)
-            await msg.reply_text(f"✅ شهر پیش‌فرض اذان: {name}")
-        else:
-            await msg.reply_text("این شهر پشتیبانی نمی‌شه؛ یکی از این‌ها رو بنویس:\n" + "، ".join(tools.CITY_NAMES))
-        panel = (more_panel, (uid, 2))
     tx, kb = panel[0](*panel[1])
     await msg.reply_text(tx, reply_markup=kb)
 
@@ -645,17 +615,6 @@ async def _dispatch(uid, ev, cmd, arg):
 
     if cmd == "date":
         return tools.date_text(arg), True
-
-    if cmd == "prayer":
-        d = sb._pget(uid)
-        want = arg.strip() or d.get("city") or "تهران"
-        if not tools.find_city(want):
-            return "این شهر پشتیبانی نمی‌شه. شهرها:\n" + "، ".join(tools.CITY_NAMES), False
-        try:
-            return await tools.prayer_text(want), True
-        except Exception as e:  # noqa: BLE001
-            logger.info("extras prayer: %s", e)
-            return "❌ سرویس اوقات شرعی الان در دسترس نیست؛ بعداً دوباره امتحان کن.", False
 
     if cmd == "short":
         text, ents = arg, None

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""ابزارهای روزمرهٔ سلف: ماشین‌حساب، تاریخ، قیمت، اوقات شرعی، کوتاه‌کنندهٔ لینک و ذخیرهٔ استوری.
+"""ابزارهای روزمرهٔ سلف: ماشین‌حساب، تاریخ، قیمت، کوتاه‌کنندهٔ لینک و ذخیرهٔ استوری.
 
 این فایل مستقل از پنل است و فقط توابع خالص/شبکه‌ای دارد؛ اتصال به دستورها و پنل در extras.py انجام می‌شود.
 منبع‌های بیرونی (همه بدون کلید API):
   • قیمت ارز/طلا/سکه : tgju.org (غیررسمی؛ ممکن است ساختارش عوض شود)  ← متغیر اختیاری PRICE_API_URL
   • قیمت ارز دیجیتال : CoinGecko
-  • اوقات شرعی        : Aladhan (روش ۷ = مؤسسهٔ ژئوفیزیک دانشگاه تهران)
   • کوتاه‌کنندهٔ لینک  : is.gd و در صورت خطا TinyURL
 """
 import ast
@@ -434,76 +433,6 @@ async def price_text(arg=""):
     if not ln:
         raise RuntimeError("coin row")
     return ln + (foot if usd_rial else f"\n🕒 {now_s} · منبع: CoinGecko")
-
-
-# ---------------------------------------------------------------- اوقات شرعی
-# نام فارسی → (نام انگلیسی, عرض, طول)
-CITIES = {
-    "تهران": ("Tehran", 35.6892, 51.3890), "مشهد": ("Mashhad", 36.2605, 59.6168),
-    "اصفهان": ("Isfahan", 32.6546, 51.6680), "شیراز": ("Shiraz", 29.5918, 52.5837),
-    "تبریز": ("Tabriz", 38.0962, 46.2738), "کرج": ("Karaj", 35.8400, 50.9391),
-    "قم": ("Qom", 34.6399, 50.8759), "اهواز": ("Ahvaz", 31.3183, 48.6706),
-    "کرمانشاه": ("Kermanshah", 34.3142, 47.0650), "ارومیه": ("Urmia", 37.5527, 45.0761),
-    "رشت": ("Rasht", 37.2808, 49.5832), "زاهدان": ("Zahedan", 29.4963, 60.8629),
-    "همدان": ("Hamedan", 34.7983, 48.5148), "کرمان": ("Kerman", 30.2839, 57.0834),
-    "یزد": ("Yazd", 31.8974, 54.3569), "اردبیل": ("Ardabil", 38.2498, 48.2933),
-    "بندرعباس": ("Bandar Abbas", 27.1865, 56.2808), "اراک": ("Arak", 34.0954, 49.6892),
-    "ساری": ("Sari", 36.5659, 53.0586), "گرگان": ("Gorgan", 36.8427, 54.4439),
-    "زنجان": ("Zanjan", 36.6736, 48.4787), "سنندج": ("Sanandaj", 35.3219, 46.9862),
-    "خرم‌آباد": ("Khorramabad", 33.4878, 48.3558), "بوشهر": ("Bushehr", 28.9234, 50.8203),
-    "بیرجند": ("Birjand", 32.8649, 59.2262), "سمنان": ("Semnan", 35.5769, 53.3920),
-    "ایلام": ("Ilam", 33.6374, 46.4227), "یاسوج": ("Yasuj", 30.6682, 51.5880),
-    "شهرکرد": ("Shahrekord", 32.3256, 50.8644), "قزوین": ("Qazvin", 36.2688, 50.0041),
-    "بجنورد": ("Bojnord", 37.4747, 57.3290),
-}
-CITY_NAMES = list(CITIES)
-_CITY_IDX = {}
-for _fa, (_en, _la, _lo) in CITIES.items():
-    _CITY_IDX[_key(_fa)] = _fa
-    _CITY_IDX[_key(_en)] = _fa
-_CITY_IDX[_key("خرمآباد")] = "خرم‌آباد"
-_CITY_IDX[_key("بندر عباس")] = "بندرعباس"
-_CITY_IDX[_key("شهر کرد")] = "شهرکرد"
-
-_PRAYER_ROWS = (("Fajr", "🌌 اذان صبح"), ("Sunrise", "🌅 طلوع آفتاب"), ("Dhuhr", "☀️ اذان ظهر"),
-                ("Sunset", "🌇 غروب آفتاب"), ("Maghrib", "🌆 اذان مغرب"), ("Midnight", "🌙 نیمه‌شب شرعی"))
-_PRAYER_CACHE = {}
-
-
-def find_city(text):
-    return _CITY_IDX.get(_key(text))
-
-
-async def prayer_text(city):
-    """اوقات شرعی امروز برای یک شهر ایران. city باید نام معتبر فارسی باشد (find_city)."""
-    fa = find_city(city)
-    if not fa:
-        raise KeyError(city)
-    en, lat, lon = CITIES[fa]
-    now = datetime.now(TEHRAN)
-    ck = (fa, now.strftime("%Y-%m-%d"))
-    data = _PRAYER_CACHE.get(ck)
-    if data is None:
-        url = (f"https://api.aladhan.com/v1/timings/{now.strftime('%d-%m-%Y')}"
-               f"?latitude={lat}&longitude={lon}&method=7&timezonestring=Asia/Tehran")
-        j = await http_json(url, 12)
-        tm = ((j or {}).get("data") or {}).get("timings") or {}
-        data = {}
-        for k, _ in _PRAYER_ROWS:
-            m = re.search(r"(\d{1,2}:\d{2})", str(tm.get(k, "")))
-            if m:
-                data[k] = m.group(1)
-        if not data:
-            raise RuntimeError("prayer source")
-        if len(_PRAYER_CACHE) > 200:
-            _PRAYER_CACHE.clear()
-        _PRAYER_CACHE[ck] = data
-    g = now.date()
-    j = gregorian_to_jalali(g.year, g.month, g.day)
-    lines = [f"🕌 اوقات شرعی {fa} — {WEEKDAYS[g.weekday()]} {_fmt_j(j)}", ""]
-    lines += [f"{label}: {to_fa(data[k])}" for k, label in _PRAYER_ROWS if k in data]
-    lines.append("\n(روش محاسبه: مؤسسهٔ ژئوفیزیک دانشگاه تهران)")
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- کوتاه‌کنندهٔ لینک
