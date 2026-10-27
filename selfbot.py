@@ -964,6 +964,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "تگ": "tag", "tag": "tag", "ریاکشن": "react", "واکنش": "react",
         "react": "react", "reykt": "react", "reaction": "react",
         "ذخیره": "save", "save": "save",
+        "ایموجی": "emoji", "emoji": "emoji", "ساعت": "clock", "clock": "clock",
         "کپی": "copy", "copy": "copy", "غیرفعال": "off", "غیر‌فعال": "off", "off": "off"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
@@ -1135,8 +1136,8 @@ async def _handle_dot(uid, ev):
         await _say(uid, ev, await extras.save_replied(uid, ev))
         return True
     # تنظیمات سلف (کلمه/زمان/گپ/دکمه/ساعت) فقط از دکمه‌های .پنل انجام می‌شوند؛
-    # فقط .کپی و .غیرفعال کپی چون به ریپلای نیاز دارن توی چت کار می‌کنن.
-    if cmd not in ("panel", "copy", "off"):
+    # دستورهای ریپلایی و سریع (.کپی، .غیرفعال کپی، .ریاکشن، .ایموجی، .ساعت) توی چت کار می‌کنن.
+    if cmd not in ("panel", "copy", "off", "react", "emoji", "clock"):
         try:
             await ev.delete()
         except Exception:
