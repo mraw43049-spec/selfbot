@@ -316,18 +316,34 @@ def more_panel(uid, page=1):
     def t(k, label):
         return B(f"{label}: {_st(d, k)}", callback_data=f"self:mt:{k}:{page}", style="success" if d.get(k) else "primary")
 
-    items = [
+    cp = sb._copy_btn
+    page1 = [
         [t("ar_on", "پاسخ خودکار پی‌وی"), B("متن پاسخ", callback_data="self:ar_text", style="primary")],
         [t("del_on", "خبر حذف/ویرایش پی‌وی")],
         [t("ttl_on", "ذخیرهٔ مدیای تایمردار")],
         [t("mn_on", "خبر منشن در گروه‌ها")],
         [t("wl_on", f"ناظر کلمه/آیدی ({len(wl)})"), B("مدیریت ناظر", callback_data="self:wl", style="primary")],
         [t("mu_on", f"سکوت پی‌وی ({len(mu)} نفر)"), B("مدیریت سکوت", callback_data="self:mu", style="primary")],
-        [B("دستورات سلف (کپی با یک لمس)", callback_data="selfi:cmds", style="primary")],
+        [B("همهٔ دستورات سلف (کپی با یک لمس)", callback_data="selfi:cmds", style="primary")],
     ]
-    pages = max(1, -(-len(items) // MORE_ROWS_PER_PAGE))
+    # صفحهٔ ابزارها: هر دکمه = دستور + توضیح؛ با لمس کپی می‌شه
+    page2 = [[cp(lbl, c)] for c, lbl in (
+        (".ترجمه", "ترجمه — ریپلای روی متن؛ ترجمهٔ فارسی"),
+        (".تگ اعضا", "تگ اعضا — منشن حداکثر ۱۰ عضو"),
+        (".حساب ", "ماشین‌حساب — مثل .حساب 25*4+10"),
+        (".قیمت ", "قیمت — دلار، یورو، طلا، سکه، ارز دیجیتال"),
+        (".تاریخ", "تاریخ — شمسی، میلادی، قمری، ساعت"),
+        (".کوتاه ", "کوتاه‌کردن لینک — یا ریپلای روی لینک"),
+        (".استوری", "ذخیرهٔ استوری — ریپلای یا لینک"),
+        (".بلاک", "بلاک سریع — ریپلای روی کاربر"),
+    )]
+    groups = []
+    for g in (page1, page2):
+        for i in range(0, len(g), MORE_ROWS_PER_PAGE):
+            groups.append(g[i:i + MORE_ROWS_PER_PAGE])
+    pages = len(groups)
     page = min(max(int(page or 1), 1), pages)
-    rows = items[(page - 1) * MORE_ROWS_PER_PAGE: page * MORE_ROWS_PER_PAGE]
+    rows = list(groups[page - 1])
     nav = []
     if page > 1:
         nav.append(B("◀ صفحهٔ قبل", callback_data=f"self:more:{page - 1}", style="primary"))
