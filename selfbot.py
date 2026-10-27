@@ -1359,7 +1359,7 @@ async def _translate_text(text):
 # ---------- پنل کاربر ----------
 def _panel(uid, name=""):
     """همون پنل اصلی (.پنل): کپشن کوتاه + دکمه‌ها؛ بدون متن توضیحی بلند."""
-    return _inl_caption(name), _inl_kb(uid, private=True)
+    return _inl_caption(name, uid), _inl_kb(uid, private=True)
 
 
 async def send_panel(bot, uid, name=""):
@@ -1461,7 +1461,7 @@ async def cb_user(update, context):
     async def home():
         ud.pop("self_st", None)
         if getattr(qm, "is_inline", False):
-            await _inl_edit(context.bot, qm.imid, _inl_caption(q.from_user.first_name or ""), _inl_kb(uid))
+            await _inl_edit(context.bot, qm.imid, _inl_caption(q.from_user.first_name or "", uid), _inl_kb(uid))
             return
         t, kb = _panel(uid, q.from_user.first_name or "")
         await qm.edit_text(t, reply_markup=kb)
@@ -1930,13 +1930,17 @@ async def prepare_banner(app):
         logger.warning("self banner: %s", e)
 
 
-def _inl_caption(name):
+def _inl_caption(name, uid=None):
     try:
         from zoneinfo import ZoneInfo
         now = datetime.now(ZoneInfo(CLOCK_TZ)).strftime("%H:%M")
     except Exception:  # noqa: BLE001
         now = datetime.now(timezone.utc).strftime("%H:%M")
-    return f"› Panel {name} {now}".replace("  ", " ")
+    cap = f"› Panel {name} {now}".replace("  ", " ")
+    if uid is not None:
+        # دستورها (.کپی، .حساب، .تاریخ...)، فونت، بازی و ساعت فقط وقتی کار می‌کنن که اکانت وصل باشه.
+        cap += "\nاتصال اکانت: " + ("وصل ✅" if uid in _clients else "قطع ❌ — اول «اتصال اکانت» رو بزن (توی ربات /self)")
+    return cap
 
 
 _panel_ctx = {}     # uid -> {"chat":..., "reply": آیدی پیامی که پنل روش ریپلای شده}
@@ -1974,7 +1978,8 @@ def _inl_kb(uid, private=False):
                        callback_data="self:disc" if uid in _clients else "self:conn", style="danger" if uid in _clients else "success")])
     elif uname:
         last.insert(0, B("تنظیمات سلف", url=f"https://t.me/{uname}?start=panel", style="primary"))
-    rows.append(last)
+    if last:
+        rows.append(last)
     rows.append([B("بستن پنل", callback_data="selfi:close", style="danger")])
     return KB(rows)
 
@@ -2003,7 +2008,7 @@ async def on_inline_query(update, context):
     if not (_allowed(uid) or uid in ADMIN_IDS):
         await iq.answer([], cache_time=0, is_personal=True)
         return
-    cap = _inl_caption(iq.from_user.first_name or "")
+    cap = _inl_caption(iq.from_user.first_name or "", uid)
     kb = _lock_kb(_inl_kb(uid), uid)
     rid = f"panel{int(time.time())}"
     url = os.environ.get("SELF_BANNER_URL", "").strip()
