@@ -876,12 +876,23 @@ EMOJI_BOT = (os.environ.get("SELF_EMOJI_BOT", "AS_EmojiBot").strip() or "AS_Emoj
 
 
 async def send_premium(client, chat, text, reply_to=None):
-    """ایموجی پریمیوم از راه ربات اینلاین: همون کاری که کاربر دستی می‌کنه (@AS_EmojiBot متن [کد])."""
-    res = await client.inline_query(EMOJI_BOT, text, entity=chat)
-    if not res:
-        return False
-    await res[0].click(chat, reply_to=reply_to)
-    return True
+    """ارسال نتیجهٔ اینلاین در همان گفتگوی جاری (گروه، سوپرگروه یا پیوی)."""
+    try:
+        # resolve a real Telethon entity; raw chat_id can be ambiguous for channels/groups
+        peer = await client.get_input_entity(chat)
+        results = await client.inline_query(EMOJI_BOT, text, entity=peer)
+        if not results:
+            logger.warning("premium inline returned no results for peer=%s", chat)
+            return False
+        # Prefer the actual premium-conversion result instead of blindly clicking result[0].
+        chosen = next((r for r in results if "تبدیل به ایموجی پرمیوم" in (getattr(r, "title", "") or "")), None)
+        if chosen is None:
+            chosen = next((r for r in results if not (getattr(r, "title", "") or "").startswith("❌")), results[0])
+        await chosen.click(entity=peer, reply_to=reply_to)
+        return True
+    except Exception as e:
+        logger.warning("premium inline send failed peer=%s: %s", chat, e, exc_info=True)
+        raise
 
 
 REACT_DEFAULT = ["❤", "🔥", "👍"]
@@ -943,10 +954,16 @@ async def emoji_send(uid, ev, arg):
             # حساب عادی نمی‌تواند مستقیماً custom-emoji entity بفرستد؛ از نتیجهٔ اینلاین استفاده می‌کنیم.
             # قالب AS_EmojiBot کدها را داخل [ ] می‌پذیرد.
             inline_text = re.sub(r"\{([0-9۰-۹٠-٩]{5,25})\}", r"[\1]", arg)
-            ok = await send_premium(client, ev.chat_id, inline_text,
-                                    reply_to=ev.reply_to_msg_id if ev.is_reply else None)
+            try:
+                ok = await send_premium(client, ev.peer_id, inline_text,
+                                        reply_to=ev.reply_to_msg_id if ev.is_reply else None)
+            except Exception as inline_error:
+                logger.info("premium inline failed in chat %s: %s", ev.chat_id, inline_error)
+                return ("❌ ارسال اینلاین در این گفتگو انجام نشد. مطمئن شو @AS_EmojiBot اجازهٔ استفادهٔ اینلاین دارد؛ "
+                        "اگر در گروه هستی، یک‌بار ربات را در همان گروه با @AS_EmojiBot صدا بزن و دوباره امتحان کن. "
+                        "جزئیات: " + str(inline_error)[:100])
             if not ok:
-                return "❌ نتیجهٔ ایموجی از ربات اینلاین دریافت نشد. مطمئن شو @AS_EmojiBot فعال است و اینلاین آن در دسترس است."
+                return "❌ ربات اینلاین هیچ نتیجه‌ای برنگرداند؛ @AS_EmojiBot یا قالب کد [آیدی] را بررسی کن."
             try:
                 await ev.delete()
             except Exception:
