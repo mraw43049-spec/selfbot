@@ -1309,6 +1309,8 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "حساب": "calc", "محاسبه": "calc", "ماشینحساب": "calc", "calc": "calc",
         "قیمت": "price", "price": "price", "تاریخ": "date", "date": "date",
         "کوتاه": "short", "کوتاهکن": "short", "short": "short", "shorten": "short",
+        "موجودی": "balance", "balance": "balance",
+        "استارز": "stars", "استار": "stars", "stars": "stars",
         "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
@@ -1387,10 +1389,28 @@ async def _del_later(m, sec):
         pass
 
 
+FMT_PAD = "⠀"   # خط خالیِ دیده‌نشدنی بالا و پایین متن تا توی نقل‌قول کمی فاصله بیفته؛ "" کن تا حذف شه
+
+
+def quote_html(body_html):
+    """قالب یکسان جواب همهٔ دستورها: پررنگ + نقل‌قول + کمی فاصله. ورودی باید HTML امن باشه."""
+    pad = FMT_PAD + "\n" if FMT_PAD else ""
+    tail = "\n" + FMT_PAD if FMT_PAD else ""
+    return f"<blockquote><b>{pad}{body_html}{tail}</b></blockquote>"
+
+
+def fancy_html(text):
+    import html as _html
+    return quote_html(_html.escape((text or "").strip()[:3800], quote=False))
+
+
 async def _say(uid, ev, text, keep=False):
-    """جواب رو همون‌جا (با ادیت پیام دستور) می‌ده و بعد چند ثانیه پاکش می‌کنه."""
+    """جواب رو همون‌جا (با ادیت پیام دستور) می‌ده (پررنگ + نقل‌قول) و بعد چند ثانیه پاکش می‌کنه."""
     try:
-        m = await ev.edit(text, parse_mode=None)
+        try:
+            m = await ev.edit(fancy_html(text), parse_mode="html")
+        except Exception:
+            m = await ev.edit(text, parse_mode=None)      # اگه قالب‌بندی رد شد، حداقل متن ساده
     except Exception:
         try:
             await _botref[0].send_message(uid, text)
@@ -1445,7 +1465,7 @@ async def _handle_dot(uid, ev):
                 await _say(uid, ev, "پیام ریپلای‌شده متن قابل ترجمه ندارد.")
             else:
                 result = await _translate_text(source)
-                await ev.reply("ترجمه:\n" + result, parse_mode=None)
+                await ev.reply(fancy_html("ترجمه:\n" + result), parse_mode="html")
                 try: await ev.delete()
                 except Exception: pass
         except Exception as e:
@@ -1457,13 +1477,14 @@ async def _handle_dot(uid, ev):
                 await _say(uid, ev, "این دستور فقط در گروه قابل استفاده است.")
                 return True
             from telethon.tl.types import User
+            import html as _html
             mentions = []
             async for participant in _clients[uid].iter_participants(ev.chat_id, limit=10):
                 if isinstance(participant, User) and not getattr(participant, "bot", False):
-                    label = (participant.first_name or "عضو").replace("[", "").replace("]", "")
-                    mentions.append(f"[{label}](tg://user?id={participant.id})")
+                    label = _html.escape(participant.first_name or "عضو", quote=False)
+                    mentions.append(f'<a href="tg://user?id={participant.id}">{label}</a>')
             if mentions:
-                await ev.reply("اعضای گروه (حداکثر ۱۰ نفر):\n" + " ".join(mentions), parse_mode="md")
+                await ev.reply(quote_html("اعضای گروه (حداکثر ۱۰ نفر):\n" + " ".join(mentions)), parse_mode="html")
             else:
                 await _say(uid, ev, "عضوی برای منشن در دسترس نبود.")
             try: await ev.delete()

@@ -30,7 +30,8 @@ TOOL_PER_MIN = 20             # سقف دستورهای ابزار در دقیق
 TOGGLES = ("ar_on", "del_on", "ttl_on", "mn_on", "wl_on", "mu_on")
 CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del", "tg")
 TEXT_STEPS = ("ar_text", "wl_add", "mu_add")
-CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story")
+CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story", "balance", "stars")
+STAR_WORDS = ("استارز", "استار", "ستاره", "stars", "star")
 
 
 # راهنمای هر ابزار؛ با زدن دکمه‌اش نشون داده می‌شه. دستورها <code> هستن (تک‌فاصله) تا با یک لمس کپی بشن.
@@ -41,6 +42,7 @@ TOOL_GUIDES = {
              "پشتیبانی: جمع، تفریق، ضرب، تقسیم، توان ^ ، درصدِ باقی‌مانده % ، sqrt / abs / round / ln / log و اعداد فارسی."),
     "price": ("قیمت", "خلاصهٔ قیمت‌ها:\n<code>.قیمت</code>\nارز، طلا و سکه:\n<code>.قیمت دلار</code>\nیورو، پوند، درهم، لیر، طلا، سکه\n"
               "ارز دیجیتال:\n<code>.قیمت بیتکوین</code>\nاتریوم، تتر، تون، ریپل، سولانا، دوج، ترون، بایننس\nقیمت ارز/طلا به تومان نشون داده می‌شه."),
+    "stars": ("موجودی استارز", "موجودی استارز تلگرامِ اکانتت رو نشون می‌ده:\n<code>.موجودی استارز</code>\nاکانت سلف باید وصل باشه."),
     "date": ("تاریخ", "تاریخ شمسی، میلادی، قمری و ساعت تهران:\n<code>.تاریخ</code>\nتبدیل تاریخ:\n<code>.تاریخ 1405/8/5</code>\nیا\n<code>.تاریخ 2026-10-27</code>"),
     "short": ("کوتاه‌کردن لینک", "بنویس:\n<code>.کوتاه https://example.com</code>\nیا روی پیام لینک‌دار ریپلای کن و <code>.کوتاه</code> بفرست (تا ۳ لینک)."),
     "story": ("ذخیرهٔ استوری", "روی استوری فورواردی/منشن‌شده ریپلای کن و بنویس:\n<code>.استوری</code>\nیا با لینک:\n<code>.استوری t.me/username/s/123</code>\n"
@@ -50,7 +52,7 @@ TOOL_GUIDES = {
     "mute": ("سکوت", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.سکوت</code>\nبرداشتن:\n<code>.رفع سکوت</code>\nلیست و دکمهٔ روشن/خاموش از «امکانات بیشتر» ← مدیریت سکوت."),
     "block": ("بلاک سریع", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.بلاک</code>\nرفع بلاک:\n<code>.رفع بلاک</code>\nبلاک واقعی تلگرام انجام می‌شه."),
 }
-TOOL_ORDER = ("tr", "tag", "calc", "price", "date", "short", "story", "save", "emoji", "mute", "block")
+TOOL_ORDER = ("tr", "tag", "calc", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block")
 
 _cache = {}      # uid -> OrderedDict[msg_id -> rec]
 _ar_seen = {}    # uid -> {sender_id: ts}
@@ -608,6 +610,31 @@ async def _reply_text(ev):
     return "", None
 
 
+def _fmt_stars(bal):
+    """balance تلگرام: توی لایه‌های قدیمی عدد صحیحه؛ توی جدیدها StarsAmount (amount + nanos)."""
+    amount = getattr(bal, "amount", bal)
+    nanos = getattr(bal, "nanos", 0) or 0
+    amount = int(amount or 0)
+    if nanos:
+        frac = f"{nanos / 1e9:.2f}".lstrip("0")      # مثلاً ".50"
+        return f"{amount:,}{frac}"
+    return f"{amount:,}"
+
+
+async def _cmd_stars(uid):
+    """موجودی استارز تلگرامِ خودِ اکانت سلف (payments.getStarsStatus روی peer خودش)."""
+    client = sb._clients.get(uid)
+    if client is None:
+        return "اکانت سلف وصل نیست.", False
+    try:
+        from telethon.tl.functions.payments import GetStarsStatusRequest
+        from telethon.tl.types import InputPeerSelf
+    except ImportError:
+        return "❌ نسخهٔ telethon قدیمیه؛ توی requirements.txt نسخه رو بالا ببر و دوباره دیپلوی کن.", False
+    res = await asyncio.wait_for(client(GetStarsStatusRequest(peer=InputPeerSelf())), 20)
+    return f"⭐️ موجودی استارز: {_fmt_stars(res.balance)}", True
+
+
 async def _dispatch(uid, ev, cmd, arg):
     """→ (متن، نگه‌داشتن پیام). نگه‌داشتن=True یعنی جواب بعد از ۱۰ ثانیه پاک نشود."""
     if cmd == "mute":
@@ -647,6 +674,14 @@ async def _dispatch(uid, ev, cmd, arg):
 
     if cmd == "date":
         return tools.date_text(arg), True
+
+    if cmd == "balance":
+        if norm_arg(arg) in STAR_WORDS:
+            return await _cmd_stars(uid)
+        return "💰 مثل: .موجودی استارز", False
+
+    if cmd == "stars":
+        return await _cmd_stars(uid)
 
     if cmd == "short":
         text, ents = arg, None
