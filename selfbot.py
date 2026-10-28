@@ -102,6 +102,26 @@ class SelfProfile(Base):
     data = Column(Text, default="{}")
 
 
+class SelfWork(Base):
+    """قابلیت «کار»: مجوز (فقط پشتیبانی/مدیر می‌دهد) + وضعیت روشن/خاموش + تنها گپِ فعال."""
+    __tablename__ = "self_work"
+    user_id = Column(BigInteger, primary_key=True)
+    allowed = Column(Boolean, default=False)
+    active = Column(Boolean, default=False)
+    chat = Column(BigInteger, nullable=True)
+    title = Column(String, nullable=True)
+
+
+class SelfLesson(Base):
+    """قابلیت «درس» (همون ساختار SelfWork)."""
+    __tablename__ = "self_lesson"
+    user_id = Column(BigInteger, primary_key=True)
+    allowed = Column(Boolean, default=False)
+    active = Column(Boolean, default=False)
+    chat = Column(BigInteger, nullable=True)
+    title = Column(String, nullable=True)
+
+
 # ---------- ابزارها ----------
 _FA = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
@@ -226,6 +246,7 @@ def _load_runtime(uid, row):
 async def stop_client(uid, logout=False, restore=False):
     c = _clients.pop(uid, None)
     _cancel_auto(uid)
+    _cancel_feat(uid)
     _cancel_clock(uid)
     for task in _feature_tasks.pop(uid, []):
         task.cancel()
@@ -288,6 +309,7 @@ async def start_client(uid):
         logger.warning("extras attach %s: %s", uid, e)
     _clients[uid] = client
     _sync_auto(uid)
+    _sync_feat(uid)
     _sync_clock(uid)
     _sync_presence(uid)
     return True
@@ -509,6 +531,214 @@ async def _auto_fire(uid, client, s):
     btn = _pick_button(target, pos) if target else None
     if btn:
         await btn.click()
+
+
+# ---------- قابلیت‌های زمان‌بندی‌شده «کار» و «درس» ----------
+# مجوز فقط از پنل پشتیبانی/مدیر داده می‌شه. روشن‌کردن توی گپ: «.کار روشن» / «.درس روشن» (هرکدوم فقط توی یک گپ).
+#   کار : هر ۱۲.۳ ثانیه «کار» می‌فرسته و دکمهٔ وسط رو می‌زنه.
+#   درس : هر ۷ دقیقه «روباهیو درس» می‌فرسته، دکمهٔ «ریاضی» رو می‌زنه و بعدش دکمهٔ دوم رو.
+LESSON_WORD = "روباهیو درس"
+LESSON_TOPIC = "ریاضی"
+FEATS = {
+    "work": {"model": SelfWork, "label": "کار", "word": "کار", "interval": 12.3},
+    "lesson": {"model": SelfLesson, "label": "درس", "word": LESSON_WORD, "interval": 420.0},
+}
+_feat_tasks = {}   # (uid, kind) -> تسک
+
+
+def feat_get(uid, kind):
+    s = get_session()
+    try:
+        r = s.get(FEATS[kind]["model"], uid)
+        if not r:
+            return {"allowed": False, "active": False, "chat": None, "title": None}
+        return {"allowed": bool(r.allowed), "active": bool(r.active), "chat": r.chat, "title": r.title}
+    finally:
+        s.close()
+
+
+def feat_save(uid, kind, **kw):
+    M = FEATS[kind]["model"]
+    s = get_session()
+    try:
+        r = s.get(M, uid)
+        if not r:
+            r = M(user_id=uid, allowed=False, active=False)
+            s.add(r)
+        for k, v in kw.items():
+            setattr(r, k, v)
+        s.commit()
+    finally:
+        s.close()
+
+
+def feat_set_allowed(uid, kind, allowed):
+    """فقط پنل پشتیبانی/مدیر صدا می‌زنه. با گرفتن مجوز، قابلیت هم خاموش می‌شه."""
+    if allowed:
+        feat_save(uid, kind, allowed=True)
+    else:
+        feat_save(uid, kind, allowed=False, active=False, chat=None, title=None)
+    _sync_feat(uid, kind)
+
+
+def _cancel_feat(uid, kind=None):
+    for k in ([kind] if kind else list(FEATS)):
+        t = _feat_tasks.pop((uid, k), None)
+        if t:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+
+
+def _sync_feat(uid, kind=None):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    for k in ([kind] if kind else list(FEATS)):
+        w = feat_get(uid, k)
+        if not (uid in _clients and w["allowed"] and w["active"] and w["chat"]):
+            _cancel_feat(uid, k)
+            continue
+        t = _feat_tasks.get((uid, k))
+        if t and not t.done():
+            continue
+        _feat_tasks[(uid, k)] = loop.create_task(_feat_loop(uid, k))
+
+
+def _btn_texts(m):
+    return [b for row in (m.buttons or []) for b in row]
+
+
+async def _lesson_fire(uid, client, chat):
+    """«روباهیو درس» رو می‌گه، دکمهٔ «ریاضی» رو می‌زنه، بعد دکمهٔ دوم رو."""
+    _own[(uid, chat, norm(LESSON_WORD))] = time.time() + 15
+    sent = await client.send_message(chat, LESSON_WORD)
+    target = btn = None
+    for _ in range(6):                      # جواب ربات رو چند ثانیه صبر می‌کنه
+        await asyncio.sleep(1.5)
+        async for m in client.iter_messages(chat, limit=10):
+            if m.id <= sent.id:
+                break
+            if m.buttons and await _usable(m):
+                btn = next((b for b in _btn_texts(m) if LESSON_TOPIC in (b.text or "")), None)
+                if btn:
+                    target = m
+                    break
+        if btn:
+            break
+    if not btn:
+        logger.info("self lesson %s: دکمهٔ «%s» پیدا نشد", uid, LESSON_TOPIC)
+        return
+    menu = [b.text for b in _btn_texts(target)]
+    await btn.click()
+    for _ in range(6):                      # سؤال/گزینه‌ها: ادیتِ همون پیام یا پیام تازهٔ ربات
+        await asyncio.sleep(1.5)
+        cands = [await client.get_messages(chat, ids=target.id)]
+        async for m in client.iter_messages(chat, limit=6):
+            if m.id > target.id:
+                cands.append(m)
+        for m in cands:
+            if not m or not m.buttons or not await _usable(m):
+                continue
+            bts = _btn_texts(m)
+            if [b.text for b in bts] == menu or len(bts) < 2:
+                continue                    # هنوز همون منوی موضوع‌هاست
+            await bts[1].click()
+            return
+    logger.info("self lesson %s: دکمهٔ دوم پیدا نشد", uid)
+
+
+async def _feat_fire(uid, client, kind, chat):
+    if kind == "lesson":
+        await _lesson_fire(uid, client, chat)
+    else:
+        await _auto_fire(uid, client, {"chat": chat, "word": FEATS[kind]["word"], "pos": "m"})
+
+
+async def _feat_loop(uid, kind):
+    interval = FEATS[kind]["interval"]
+    try:
+        while True:
+            t0 = time.monotonic()
+            client = _clients.get(uid)
+            w = feat_get(uid, kind)
+            if not client or not (w["allowed"] and w["active"] and w["chat"]):
+                return
+            if not _paused.get(uid) and w["chat"] != _bot_id[0]:
+                try:
+                    await _feat_fire(uid, client, kind, w["chat"])
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    logger.info("self %s %s: %s", kind, uid, e)
+                    wait = getattr(e, "seconds", None)
+                    if isinstance(wait, int) and wait > 0:
+                        await asyncio.sleep(min(wait, 300))
+            await asyncio.sleep(max(1.0, interval - (time.monotonic() - t0)))
+    finally:
+        if _feat_tasks.get((uid, kind)) is asyncio.current_task():
+            _feat_tasks.pop((uid, kind), None)
+
+
+def _fmt_interval(kind):
+    n = FEATS[kind]["interval"]
+    return f"{int(n // 60)} دقیقه" if n >= 60 else f"{n:g} ثانیه"
+
+
+def _feat_what(kind):
+    if kind == "lesson":
+        return f"«{LESSON_WORD}» رو می‌گه، دکمهٔ «{LESSON_TOPIC}» رو می‌زنه و بعد دکمهٔ دوم رو"
+    return f"«{FEATS[kind]['word']}» رو می‌گه و دکمهٔ وسط رو می‌زنه"
+
+
+async def feat_cmd(uid, ev, kind, arg):
+    """.کار / .درس  →  روشن | خاموش | (وضعیت)"""
+    lb = FEATS[kind]["label"]
+    w = feat_get(uid, kind)
+    if not w["allowed"]:
+        return f"⛔ قابلیت «{lb}» برای حساب تو فعال نیست. از پشتیبانی بخواه فعالش کنه."
+    a = norm(arg)
+    if a in ("خاموش", "off", "غیرفعال"):
+        if not w["active"]:
+            return f"ℹ️ «{lb}» الان خاموشه."
+        feat_save(uid, kind, active=False, chat=None, title=None)
+        _sync_feat(uid, kind)
+        return f"⏹ «{lb}» خاموش شد."
+    if a in ("روشن", "on", "فعال"):
+        chat = await ev.get_chat()
+        is_bot = bool(ev.is_private and getattr(chat, "bot", False))
+        if ev.chat_id in (uid, _bot_id[0]) or not (ev.is_group or is_bot):
+            return "💬 این دستور رو داخل گپِ هدف (گروه یا چت ربات) بنویس."
+        if w["active"] and w["chat"] and w["chat"] != ev.chat_id:
+            return (f"⚠️ «{lb}» همین الان توی «{w['title'] or 'یه گپ دیگه'}» روشنه و فقط توی یک گپ می‌شه فعالش کرد.\n"
+                    f"اول اونجا «.{lb} خاموش» بزن.")
+        if w["active"]:
+            return f"ℹ️ «{lb}» توی همین گپ از قبل روشنه."
+        title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(ev.chat_id)
+        feat_save(uid, kind, active=True, chat=ev.chat_id, title=str(title)[:40])
+        _sync_feat(uid, kind)
+        return f"✅ «{lb}» روشن شد؛ هر {_fmt_interval(kind)} {_feat_what(kind)} می‌زنه."
+    st = f"روشن توی «{w['title']}»" if w["active"] else "خاموش"
+    return f"🛠 {lb}: {st}\nمثل: .{lb} روشن   |   .{lb} خاموش"
+
+
+def _feat_panel(uid, kind):
+    lb = FEATS[kind]["label"]
+    w = feat_get(uid, kind)
+    st = f"روشن توی «{w['title'] or 'گپ'}»" if w["active"] else "خاموش"
+    t = (f"› {lb}\n\n"
+         f"وضعیت: {st}\n\n"
+         f"هر {_fmt_interval(kind)} خودش {_feat_what(kind)} می‌زنه.\n\n"
+         f"روشن‌کردن: توی گپِ موردنظر بنویس  .{lb} روشن\n"
+         f"خاموش‌کردن: .{lb} خاموش  (یا دکمهٔ پایین)\n"
+         "فقط توی یک گپ می‌شه فعالش کرد.")
+    rows = []
+    if w["active"]:
+        rows.append([B("خاموش کردن", callback_data=f"self:{kind}off", style="danger")])
+    rows.append([B("بازگشت", callback_data="self:games", style="primary")])
+    return t, KB(rows)
 
 
 async def start_all(app):
@@ -1044,7 +1274,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "حساب": "calc", "محاسبه": "calc", "ماشینحساب": "calc", "calc": "calc",
         "قیمت": "price", "price": "price", "تاریخ": "date", "date": "date",
         "کوتاه": "short", "کوتاهکن": "short", "short": "short", "shorten": "short",
-        "استوری": "story", "story": "story"}
+        "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1216,7 +1446,7 @@ async def _handle_dot(uid, ev):
         return True
     # تنظیمات سلف (کلمه/زمان/گپ/دکمه/ساعت) فقط از دکمه‌های .پنل انجام می‌شوند؛
     # دستورهای ریپلایی و سریع (.کپی، .غیرفعال کپی، .ریاکشن، .ایموجی، .ساعت) توی چت کار می‌کنن.
-    if cmd not in ("panel", "copy", "off", "react", "emoji", "clock"):
+    if cmd not in ("panel", "copy", "off", "react", "emoji", "clock", "work", "lesson"):
         try:
             await ev.delete()
         except Exception:
@@ -1240,6 +1470,9 @@ async def _handle_dot(uid, ev):
                 except Exception:
                     pass
                 await send_panel(_botref[0], uid)
+            return True
+        if cmd in FEATS:
+            await _say(uid, ev, await feat_cmd(uid, ev, cmd, arg))
             return True
         if cmd == "off":
             what = norm(re.sub(r"^فعال\s*", "", arg or ""))
@@ -1555,6 +1788,17 @@ async def cb_user(update, context):
         await qm.edit_text(t, reply_markup=kb, parse_mode="HTML")
     elif a == "games":
         t, kb = _games_panel(uid)
+        await qm.edit_text(t, reply_markup=kb)
+    elif a in ("work", "workoff", "lesson", "lessonoff"):
+        kind = a[:-3] if a.endswith("off") else a
+        if not feat_get(uid, kind)["allowed"]:
+            t, kb = _games_panel(uid)
+            await qm.edit_text(t, reply_markup=kb)
+            return
+        if a.endswith("off"):
+            feat_save(uid, kind, active=False, chat=None, title=None)
+            _sync_feat(uid, kind)
+        t, kb = _feat_panel(uid, kind)
         await qm.edit_text(t, reply_markup=kb)
     elif a == "features":
         await home()
@@ -2073,6 +2317,11 @@ def _games_panel(uid):
         lines.append(_slot_line(i, s))
         t = f"{i + 1}. «{s['word']}» {(s.get('title') or '')[:12]} {POS[s.get('pos', 'n')]}" if s.get("word") else f"{i + 1}. تنظیم کلمه"
         kb.append([B(t[:60], callback_data=f"self:s:{i}", style="primary")])
+    for kind, f in FEATS.items():     # فقط برای کاربرانی که پشتیبانی فعال کرده
+        w = feat_get(uid, kind)
+        if w["allowed"]:
+            kb.append([B(f["label"] + (" (روشن)" if w["active"] else ""), callback_data=f"self:{kind}",
+                         style="success" if w["active"] else "primary")])
     kb.append([B("بازگشت", callback_data="self:home", style="primary")])
     return "\n".join(lines)[:1000], KB(kb)
 
@@ -2422,6 +2671,10 @@ async def _admin_input(update, context, action, text):
             y = s.get(SelfProfile, uid)
             if y:
                 s.delete(y)
+            for M in (SelfWork, SelfLesson):
+                wk = s.get(M, uid)
+                if wk:
+                    s.delete(wk)
             s.commit()
         finally:
             s.close()

@@ -726,6 +726,15 @@ def sup_kb():
                [B('📢 پیام همگانی',callback_data='adm:bc')],
                [B('✖️ بستن',callback_data='sup:close')]])
 
+def lookup_kb(uid):
+    rows = []
+    for kind, f in selfbot.FEATS.items():
+        on = selfbot.feat_get(uid, kind)['allowed']
+        lb = f['label']
+        rows.append([B(f'🛠 غیرفعال‌کردن «{lb}» برای کاربر' if on else f'🛠 فعال‌کردن «{lb}» برای کاربر',
+                       callback_data=f"sup:feat:{kind}:{'off' if on else 'on'}:{uid}")])
+    return KB(rows + [list(r) for r in sup_kb().inline_keyboard])
+
 async def support_panel(update, context):
     u = update.effective_user
     if not u or not is_staff(u.id) or update.effective_chat.type != 'private':
@@ -795,6 +804,21 @@ async def sup_cb(update, context):
         try: await q.edit_message_reply_markup(reply_markup=None)
         except Exception: pass
         await q.message.reply_text(f'✅ تیکت #{tid} بسته شد.')
+    elif act == 'feat':
+        parts = (q.data or '').split(':')
+        try:
+            kind, mode, target = parts[2], parts[3], int(parts[4])
+            lb = selfbot.FEATS[kind]['label']
+        except Exception:
+            return
+        selfbot.feat_set_allowed(target, kind, mode == 'on')
+        await q.message.reply_text(f"{'✅' if mode == 'on' else '⏹'} «{lb}» برای {target} {'فعال شد.' if mode == 'on' else 'غیرفعال شد.'}",
+                                   reply_markup=lookup_kb(target))
+        if mode == 'on':
+            try:
+                await context.bot.send_message(target, f'✅ قابلیت «{lb}» برات فعال شد؛ از «تنظیم بازی» ← «{lb}» می‌تونی ببینیش.')
+            except Exception:
+                pass
     elif act == 'lookup':
         context.user_data['sup_step'] = 'lookup'
         await q.message.reply_text('🔎 آیدی عددی کاربر رو بفرست. برای لغو بنویس «لغو».')
@@ -816,6 +840,7 @@ def user_info_text(uid):
         ptxt = '\n'.join(f'#{p.id} | پلن {p.plan} | {stt.get(p.status, p.status)}' for p in pays) or 'پرداختی ندارد.'
         return (f'👤 کاربر {uid}\n💎 موجودی: {fmt_bal(w.balance)} الماس\n🔌 سلف: {"روشن" if w.self_started else "خاموش"}'
                 f'\n🔑 دسترسی: {"فعال" if row and row.enabled else "غیرفعال"} | اتصال: {"زنده" if uid in selfbot._clients else "—"}'
+                f'\n🛠 کار: {"مجاز" if selfbot.feat_get(uid, "work")["allowed"] else "غیرمجاز"} | 📚 درس: {"مجاز" if selfbot.feat_get(uid, "lesson")["allowed"] else "غیرمجاز"}'
                 f'\n\n🧾 آخرین پرداخت‌ها:\n{ptxt}')
     finally:
         s.close()
@@ -850,7 +875,7 @@ async def incoming(update,context):
         context.user_data.pop('sup_step',None)
         if t=='لغو': await m.reply_text('لغو شد.'); return
         if not t.isdigit(): await m.reply_text('❗️ فقط آیدی عددی بفرست.'); context.user_data['sup_step']='lookup'; return
-        await m.reply_text(user_info_text(int(t)),reply_markup=sup_kb()); return
+        await m.reply_text(user_info_text(int(t)),reply_markup=lookup_kb(int(t))); return
     if context.user_data.get('gift_step')=='admin_new' and u.id in selfbot.ADMIN_IDS and m.text:
         t=m.text.strip()
         if t=='لغو':
