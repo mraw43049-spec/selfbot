@@ -6,10 +6,12 @@
   .استیکر           (ریپلای روی استیکر) → تبدیل به عکس (PNG) یا ویدیو (mp4)
   .متن ویس          (ریپلای روی ویس / ویدیو مسیج) → متن ویس به‌صورت ریپلای
   .ویس سلام         (یا ریپلای روی متن و .ویس) → متن به ویس با Edge TTS؛ .ویس مرد ... | .ویس زن ... | سریع / آهسته
+  .میم متن بالا | متن پایین   (ریپلای روی عکس / ویدیو / گیف) → میم؛ عکس ← عکس، ویدیو و گیف ← ویدیو (همین‌طور: .ویدیو میم ...)
 از extras._dispatch صدا زده می‌شن؛ هر تابع (متن، نگه‌داشتن) برمی‌گردونه.
 """
 import asyncio
 import logging
+import mimetypes
 import os
 import re
 import tempfile
@@ -19,7 +21,11 @@ import selfdl as dl
 
 logger = logging.getLogger("selfmedia")
 
-CMDS = ("sticker", "stt", "tts")
+CMDS = ("sticker", "stt", "tts", "meme")
+
+# اگه پایتون سرور این پسوندها رو نشناسه، تلگرام فایل رو «استیکر» نمی‌گیره و عمومی می‌فرستتش
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("video/webm", ".webm")
 
 ALT_EMOJI = "🙂"
 STICKER_MAX_BYTES = 512 * 1024         # استیکر ثابت
@@ -73,7 +79,14 @@ def _load_font(size, basic):
                 return ImageFont.truetype(p, size)
             except Exception as e:  # noqa: BLE001
                 logger.info("font %s: %s", p, e)
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default(size)          # Pillow>=10.1: اندازه‌دار (فقط لاتین)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _has_font():
+    return any(p and os.path.isfile(p) for p in _FONT_CANDIDATES)
 
 
 def _shaper():
@@ -189,7 +202,8 @@ async def _send_sticker(client, chat, path, reply_to, video=False, ff=None):
         from PIL import Image
         with Image.open(path) as im:
             attrs.append(DocumentAttributeImageSize(*im.size))
-    await client.send_file(chat, path, attributes=attrs, force_document=True, reply_to=reply_to)
+    # force_document=True تلگرام رو مجبور می‌کرد «فایل» بفرسته و ویژگی استیکر نادیده گرفته می‌شد
+    await client.send_file(chat, path, attributes=attrs, force_document=False, reply_to=reply_to)
 
 
 # ---------- .استیکر ----------
@@ -241,6 +255,156 @@ async def cmd_sticker(uid, ev, arg):
                 out = os.path.join(td, "sticker.mp4")
                 await vsticker_to_mp4(ff, src, out)
                 await dl._send_one(client, ev.chat_id, out, "", ff, reply_to)
+    try:
+        await ev.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    return None, False
+
+
+# ---------- .میم ----------
+MEME_TEXT_MAX = 120
+MEME_VIDEO_SIDE = 720                  # ضلع بلندتر ویدیوی خروجی
+MEME_VIDEO_SECONDS = 60
+MEME_USAGE = ("😂 روی عکس، ویدیو یا گیف ریپلای کن و بنویس:\n.میم متن بالا | متن پایین\n"
+              "فقط بالا: .میم سلام   |   فقط پایین: .میم | سلام\n"
+              "(خروجی عکس ← عکس، ویدیو/گیف ← ویدیو)")
+
+
+def parse_meme(arg):
+    """'بالا | پایین' (یا دو خط) → (بالا، پایین). فقط یه متن = متن بالا."""
+    t = (arg or "").strip()
+    if "|" in t:
+        top, bottom = t.split("|", 1)
+    elif "\n" in t:
+        top, bottom = t.split("\n", 1)
+    else:
+        top, bottom = t, ""
+    return tuple(" ".join(x.split())[:MEME_TEXT_MAX].upper() for x in (top, bottom))
+
+
+def _meme_layer(w, h, top, bottom):
+    """لایهٔ شفاف w×h با متن سفیدِ حاشیه‌مشکی بالا و پایین (فارسی و لاتین)."""
+    from PIL import Image, ImageDraw
+    if any(ord(c) > 127 for c in top + bottom) and not _has_font():
+        raise dl.DLError("❌ فونت پیدا نشد؛ فایل fonts/DejaVuSans-Bold.ttf رو کنار فایل‌های سلف بذار و دوباره دیپلوی کن.")
+    shape, basic = _shaper()
+    margin = max(6, int(min(w, h) * 0.03))
+    box_w = w - 2 * margin
+    max_h = int(h * 0.32)
+
+    def layout(text):
+        size = max(16, int(min(w, h) * 0.13))
+        while True:
+            font = _load_font(size, basic)
+            stroke = max(2, size // 9)
+            lines, cur = [], ""
+            for word in text.split():
+                trial = (cur + " " + word).strip()
+                if cur and font.getlength(shape(trial)) + 2 * stroke > box_w:
+                    lines.append(cur)
+                    cur = word
+                else:
+                    cur = trial
+            lines.append(cur)
+            lh = int(size * 1.2)
+            widest = max(font.getlength(shape(ln)) for ln in lines) + 2 * stroke
+            if (widest <= box_w and lh * len(lines) <= max_h) or size <= 16:
+                return font, stroke, lines, lh
+            size -= 2
+
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for text, at_top in ((top, True), (bottom, False)):
+        if not text:
+            continue
+        font, stroke, lines, lh = layout(text)
+        y = margin if at_top else h - margin - lh * len(lines)
+        for ln in lines:
+            sh = shape(ln)
+            x = (w - font.getlength(sh)) / 2
+            d.text((x, y), sh, font=font, fill=(255, 255, 255, 255), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+            y += lh
+    return layer
+
+
+def make_image_meme(src, out, top, bottom):
+    from PIL import Image, ImageOps
+    im = ImageOps.exif_transpose(Image.open(src))
+    if im.mode != "RGB":                              # شفافیت (مثلاً استیکر) روی پس‌زمینهٔ سفید
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        bg.alpha_composite(im)
+        im = bg.convert("RGB")
+    w, h = im.size
+    big = max(w, h)
+    k = 1280 / big if big > 1280 else (640 / big if big < 640 else 1.0)
+    if k != 1.0:
+        im = im.resize((max(2, round(w * k)), max(2, round(h * k))), Image.LANCZOS)
+    layer = _meme_layer(im.size[0], im.size[1], top, bottom)
+    Image.alpha_composite(im.convert("RGBA"), layer).convert("RGB").save(out, "JPEG", quality=92)
+
+
+async def _video_size(ff, path):
+    """(عرض، ارتفاع) واقعی بعد از چرخش (ویدیوهای موبایل متادیتای چرخش دارن)."""
+    _, err = await dl._run_ff(ff, "-hide_banner", "-i", path)
+    m = re.search(r"Video:.*?[ ,](\d{2,5})x(\d{2,5})[ ,\[]", err)
+    if not m:
+        return 0, 0
+    w, h = int(m.group(1)), int(m.group(2))
+    r = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees", err)
+    if r and int(abs(float(r.group(1)))) % 180 == 90:
+        w, h = h, w
+    return w, h
+
+
+async def make_video_meme(ff, src, out, top, bottom, td):
+    w, h = await _video_size(ff, src)
+    if not (w and h):
+        raise dl.DLError("❌ ابعاد ویدیو خونده نشد.")
+    k = min(1.0, MEME_VIDEO_SIDE / max(w, h))
+    W, H = max(2, int(w * k) // 2 * 2), max(2, int(h * k) // 2 * 2)
+    png = os.path.join(td, "meme_layer.png")
+    layer = await asyncio.get_running_loop().run_in_executor(None, _meme_layer, W, H, top, bottom)
+    layer.save(png)
+    fc = f"[0:v]scale={W}:{H},setsar=1[b];[b][1:v]overlay=0:0,format=yuv420p[v]"
+    rc, err = await dl._run_ff(ff, "-y", "-i", src, "-i", png, "-filter_complex", fc,
+                               "-map", "[v]", "-map", "0:a?", "-t", str(MEME_VIDEO_SECONDS),
+                               "-c:v", "libx264", "-preset", "veryfast", "-crf", "27",
+                               "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", out, timeout=300)
+    if rc != 0 or not os.path.exists(out):
+        logger.info("meme ffmpeg: %s", err[-300:])
+        raise dl.DLError("❌ ساخت میم ویدیویی انجام نشد (فرمت ویدیو پشتیبانی نمی‌شه یا زمانش تموم شد).")
+
+
+async def cmd_meme(uid, ev, arg):
+    client = sb._clients.get(uid)
+    if client is None:
+        return "اکانت سلف وصل نیست.", False
+    top, bottom = parse_meme(arg)
+    r = await ev.get_reply_message() if ev.is_reply else None
+    kind = _kind(r)
+    if kind not in ("image", "video", "sticker_img", "sticker_vid") or not (top or bottom):
+        return MEME_USAGE, True
+    src_size = getattr(getattr(r, "file", None), "size", 0) or 0
+    if src_size > SRC_MAX_BYTES:
+        return "❌ فایل بزرگ‌تر از 40 مگابایته.", False
+    ff = dl._ffmpeg()
+    if kind in ("video", "sticker_vid") and not ff:
+        return "❌ ffmpeg نصب نیست؛ imageio-ffmpeg رو نصب کن و دوباره دیپلوی کن.", False
+    await dl._status(ev, "⏳ در حال ساخت میم…")
+    with tempfile.TemporaryDirectory(prefix="meme_") as td:
+        src = await asyncio.wait_for(client.download_media(r, file=os.path.join(td, "in")), 180)
+        if not src:
+            return "❌ دانلود فایل انجام نشد.", False
+        if kind in ("image", "sticker_img"):
+            out = os.path.join(td, "meme.jpg")
+            await asyncio.get_running_loop().run_in_executor(None, make_image_meme, src, out, top, bottom)
+            await client.send_file(ev.chat_id, out, reply_to=r.id, force_document=False)
+        else:
+            out = os.path.join(td, "meme.mp4")
+            await make_video_meme(ff, src, out, top, bottom, td)
+            await dl._send_one(client, ev.chat_id, out, "", ff, r.id)
     try:
         await ev.delete()
     except Exception:  # noqa: BLE001
@@ -417,6 +581,8 @@ async def run(uid, ev, cmd, arg):
             try:
                 if cmd == "sticker":
                     return await cmd_sticker(uid, ev, arg)
+                if cmd == "meme":
+                    return await cmd_meme(uid, ev, arg)
                 if cmd == "stt":
                     return await cmd_stt(uid, ev, arg)
                 if cmd == "tts":

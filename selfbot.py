@@ -935,6 +935,7 @@ async def _ensure_orig(uid, client):
     from telethon.tl.functions.users import GetFullUserRequest
     me = await client.get_me()
     full = await client(GetFullUserRequest(me))
+    d = _pget(uid)          # بعد از awaitها دوباره بخون؛ نسخهٔ قدیمی ممکنه تغییرات تازه رو پاک کنه
     d["orig_first"] = me.first_name or ""
     d["orig_last"] = me.last_name or ""
     d["orig_about"] = getattr(full.full_user, "about", None) or ""
@@ -942,10 +943,18 @@ async def _ensure_orig(uid, client):
     return d
 
 
+_CLOCK_COPY_KEYS = ("orig_first", "orig_last", "orig_about", "last_clock",
+                    "copy_first", "copy_last", "copy_photo", "copy_about", "clock_on", "copy_on")
+
+
 def _maybe_clear(uid):
+    """وقتی ساعت و کپی هر دو خاموشن، فقط کلیدهای مربوط به همین دو پاک می‌شن.
+    (قبلاً کل پروفایل پاک می‌شد و شمارهٔ کارت، متن خوشامد و بقیهٔ تنظیمات هم از بین می‌رفتن.)"""
     d = _pget(uid)
     if not d.get("clock_on") and not d.get("copy_on"):
-        _pput(uid, {"font": d.get("font", 1)})
+        for k in _CLOCK_COPY_KEYS:
+            d.pop(k, None)
+        _pput(uid, d)
 
 
 async def _apply_name(uid, client, about=None):
@@ -958,6 +967,7 @@ async def _apply_name(uid, client, about=None):
     clk = fmt_clock(d.get("font", 1)) if d.get("clock_on") else None
     first = build_first_name(bf, clk)
     await client(UpdateProfileRequest(first_name=first, last_name=(bl or "")[:64], about=about))
+    d = _pget(uid)          # دوباره بخون تا چیزی که وسط کار ذخیره شده (مثل کارت) پاک نشه
     d["last_clock"] = clk
     _pput(uid, d)
 
@@ -1350,6 +1360,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "ویدیو": "vnote", "ویدیومسیج": "vnote", "گرد": "vnote", "vnote": "vnote",
         "عضویت": "joinall", "joinall": "joinall",
         "استارز": "stars", "استار": "stars", "stars": "stars",
+        "میم": "meme", "meme": "meme",
         "استیکر": "sticker", "sticker": "sticker", "متن": "stt", "stt": "stt", "ویس": "tts", "tts": "tts",
         "یوتیوب": "yt", "یوتوب": "yt", "youtube": "yt", "yt": "yt",
         "اینستا": "insta", "اینستاگرام": "insta", "insta": "insta", "instagram": "insta",

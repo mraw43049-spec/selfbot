@@ -354,40 +354,90 @@ def attach(uid, client):
 
 
 # ---------- .کارت ----------
+# کاراکترهای نامرئی (جهت‌نما، نیم‌فاصله‌ی صفر عرض و ...) که موقع کپی از اپ بانک‌ها قاطی شماره می‌شن
+_INVIS = re.compile(r"[\u200b\u200d-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u00ad\u0640]")
+_CARD_RE = re.compile(r"(?<![0-9])(?:[0-9][\s\-./،,_]?){15}[0-9](?![0-9])")
+_CARD_KEYS = r"(?:ذخیره|ثبت|set|save|add)"
+
+
+def _luhn_ok(n):
+    tot = 0
+    for i, ch in enumerate(reversed(n)):
+        v = int(ch)
+        if i % 2:
+            v *= 2
+            if v > 9:
+                v -= 9
+        tot += v
+    return tot % 10 == 0
+
+
+def _card_parse(text):
+    """متن آزاد → (۱۶ رقم، نام صاحب کارت). اگه شماره پیدا نشد (None, تعداد رقم‌های دیده‌شده)."""
+    raw = sb.fa2en(_INVIS.sub("", text or ""))
+    m = _CARD_RE.search(raw)
+    if not m:
+        return None, len(re.findall(r"[0-9]", raw))
+    digits = re.sub(r"[^0-9]", "", m.group(0))
+    owner = (raw[:m.start()] + " " + raw[m.end():]).strip()
+    owner = re.sub(r"^(?:به[\s\u200c]*نام|بنام|نام|owner|name)\s*[:：]?\s*", "", owner, flags=re.I)
+    return digits, " ".join(owner.split())[:40]
+
+
 def _card_load(d):
+    """→ (وضعیت، کارت): none = ذخیره نشده | bad = ذخیره شده ولی با کلید فعلی باز نمی‌شه | ok."""
     tok = d.get("card_enc")
     if not tok:
-        return None
+        return "none", None
     try:
         import json
-        return json.loads(sb._fernet().decrypt(tok.encode()).decode())
-    except Exception:  # noqa: BLE001
-        return None
+        return "ok", json.loads(sb._fernet().decrypt(tok.encode()).decode())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("card decrypt failed: %s", type(e).__name__)
+        return "bad", None
+
+
+def _card_save(uid, digits, owner):
+    """ذخیره + خوندن دوباره برای اطمینان. → True اگه واقعاً ذخیره شد."""
+    import json
+    d = sb._pget(uid)
+    d["card_enc"] = sb._fernet().encrypt(json.dumps({"n": digits, "o": owner}, ensure_ascii=False).encode()).decode()
+    sb._pput(uid, d)
+    st, c = _card_load(sb._pget(uid))
+    return st == "ok" and bool(c) and c.get("n") == digits
 
 
 async def cmd_card(uid, ev, arg):
-    d = sb._pget(uid)
     a = (arg or "").strip()
     sub = sb.norm(a)
     if sub in ("حذف", "پاک", "delete", "del"):
+        d = sb._pget(uid)
         d.pop("card_enc", None)
         sb._pput(uid, d)
         return "🗑 کارت حذف شد.", False
-    m = re.match(r"^(?:ذخیره|ثبت|set|save)\s+(.+)$", a, re.S)
-    if m:
-        raw = sb.fa2en(m.group(1))
-        num = re.search(r"(?:\d[\s\-]?){15}\d", raw)
-        if not num:
-            return "💳 مثل: .کارت ذخیره 6037 9918 1234 5678 به‌نام فلانی", False
-        digits = re.sub(r"\D", "", num.group(0))
-        owner = (raw[:num.start()] + " " + raw[num.end():]).strip()[:40]
-        import json
-        d["card_enc"] = sb._fernet().encrypt(json.dumps({"n": digits, "o": owner}, ensure_ascii=False).encode()).decode()
-        sb._pput(uid, d)
-        return "✅ کارت ذخیره شد (رمزنگاری‌شده). برای ارسال: .کارت", False
+    km = re.match(r"^" + _CARD_KEYS + r"\s*(.*)$", a, re.S | re.I)
     if a:
-        return "💳 .کارت (ارسال)   |   .کارت ذخیره 6037... نام   |   .کارت حذف", False
-    c = _card_load(d)
+        # «.کارت ذخیره 6037 ... نام» یا مستقیم «.کارت 6037 ... نام»
+        digits, owner = _card_parse(km.group(1) if km else a)
+        if digits is None:
+            seen = owner                      # وقتی شماره پیدا نشه، مقدار دوم تعداد رقم‌های دیده‌شده‌ست
+            if not km and not seen:
+                return "💳 .کارت (ارسال)   |   .کارت ذخیره 6037 9918 1234 5678 نام   |   .کارت حذف", False
+            return (f"❌ شمارهٔ ۱۶ رقمی پیدا نشد (فقط {seen} رقم دیدم).\n"
+                    "مثل: .کارت ذخیره 6037 9918 1234 5678 به‌نام فلانی"), False
+        try:
+            ok = _card_save(uid, digits, owner)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("card save failed: %s", e)
+            return "❌ ذخیره انجام نشد (خطای دیتابیس)؛ لاگ سرور رو ببین.", False
+        if not ok:
+            return "❌ کارت ذخیره نشد؛ بعد از نوشتن توی دیتابیس دوباره نخوندمش. لاگ سرور رو ببین.", False
+        warn = "" if _luhn_ok(digits) else "\n⚠️ این شماره از چک اعتبار کارت رد نشد؛ یه بار دوباره بررسیش کن."
+        return "✅ کارت ذخیره شد (رمزنگاری‌شده). برای ارسال: .کارت" + warn, False
+    st, c = _card_load(sb._pget(uid))
+    if st == "bad":
+        return ("⚠️ کارتی ذخیره شده ولی با کلید فعلی باز نمی‌شه (SELF_KEY یا BOT_TOKEN عوض شده).\n"
+                "دوباره ذخیره کن: .کارت ذخیره 6037 ... نام"), False
     if not c:
         return "کارتی ذخیره نشده؛ بنویس: .کارت ذخیره 6037 9918 1234 5678 به‌نام فلانی", False
     n = c["n"]
@@ -410,6 +460,10 @@ async def cmd_vnote(uid, ev, arg):
     client = sb._clients.get(uid)
     if client is None:
         return "اکانت سلف وصل نیست.", False
+    mm = re.match(r"^\s*(?:میم|meme)\b\s*(.*)$", arg or "", re.S | re.I)
+    if mm:                                   # «.ویدیو میم بالا | پایین» = «.میم بالا | پایین»
+        import selfmedia
+        return await selfmedia.run(uid, ev, "meme", mm.group(1))
     if sb.norm(arg) not in ("", "مسیج", "message", "msg", "note"):
         return "🎥 روی ویدیو یا گیف ریپلای کن و بنویس: .ویدیو مسیج", False
     r = await ev.get_reply_message() if ev.is_reply else None
