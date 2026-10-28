@@ -757,6 +757,7 @@ def sup_kb():
     return KB([[B('📥 رسیدهای در انتظار',callback_data='sup:pending')],
                [B('🎫 تیکت‌های باز',callback_data='sup:tickets')],
                [B('🔎 بررسی کاربر',callback_data='sup:lookup')],
+               [B('😂 دستورات میم',callback_data='sup:memehelp')],
                [B('📢 پیام همگانی',callback_data='adm:bc')],
                [B('✖️ بستن',callback_data='sup:close')]])
 
@@ -774,7 +775,7 @@ async def support_panel(update, context):
     if not u or not is_staff(u.id) or update.effective_chat.type != 'private':
         return
     context.user_data.pop('sup_step', None)
-    await update.effective_message.reply_text('🛟 پنل پشتیبانی\n\n📥 رسیدها با عکس رسید؛ اول «من بررسی می‌کنم» رو بزن تا کس دیگه‌ای همزمان تأییدش نکنه\n🎫 تیکت‌های کاربران؛ پاسخ با متن، عکس، ویس، ویدیو یا فایل\n🔎 بررسی کاربر با آیدی عددی\n📢 پیام همگانی با هر نوع مدیا', reply_markup=sup_kb())
+    await update.effective_message.reply_text('🛟 پنل پشتیبانی\n\n📥 رسیدها با عکس رسید؛ اول «من بررسی می‌کنم» رو بزن تا کس دیگه‌ای همزمان تأییدش نکنه\n🎫 تیکت‌های کاربران؛ پاسخ با متن، عکس، ویس، ویدیو یا فایل\n🔎 بررسی کاربر با آیدی عددی\n😂 دستورات میم: متنی که کاربر توی دکمهٔ «میم» پنل می‌بینه\n📢 پیام همگانی با هر نوع مدیا', reply_markup=sup_kb())
 
 async def sup_cb(update, context):
     q = update.callback_query
@@ -856,6 +857,12 @@ async def sup_cb(update, context):
     elif act == 'lookup':
         context.user_data['sup_step'] = 'lookup'
         await q.message.reply_text('🔎 آیدی عددی کاربر رو بفرست. برای لغو بنویس «لغو».')
+    elif act == 'memehelp':
+        import selfmodes
+        context.user_data['sup_step'] = 'memehelp'
+        await q.message.reply_text('😂 متنی که الان کاربر توی دکمهٔ «میم» پنل سلف می‌بینه:\n\n' + selfmodes.meme_help()
+                                   + f'\n\n— — —\nمتن جدید رو بفرست (حداکثر {selfmodes.MEME_HELP_MAX} حرف؛ دستورها رو همین‌جا بنویس).\n'
+                                   'برگشت به متن پیش‌فرض: «پیش‌فرض» | لغو: «لغو»')
     elif act == 'close':
         try:
             await q.message.delete()
@@ -890,6 +897,18 @@ async def incoming(update,context):
         try: tid=int(sst.split(':')[1])
         except Exception: return
         await ticket_reply(m,context,tid); return
+    if sst == 'memehelp' and is_staff(u.id) and m.text:
+        import selfmodes
+        t = m.text.strip()
+        if t == 'لغو':
+            context.user_data.pop('sup_step', None); await m.reply_text('لغو شد.'); return
+        if len(t) > selfmodes.MEME_HELP_MAX:
+            await m.reply_text(f'❗️ متن {len(t)} حرفه؛ حداکثر {selfmodes.MEME_HELP_MAX} حرف. کوتاه‌ترش کن و دوباره بفرست (یا «لغو»).'); return
+        context.user_data.pop('sup_step', None)
+        if t == 'پیش‌فرض' or t == 'پیشفرض':
+            selfmodes.set_meme_help(None); await m.reply_text('✅ متن میم به پیش‌فرض برگشت.'); return
+        selfmodes.set_meme_help(t)
+        await m.reply_text('✅ ذخیره شد. کاربرها از این به بعد این متن رو توی دکمهٔ «میم» می‌بینن:\n\n' + t); return
     if context.user_data.get('gift_step')=='bc_link' and is_staff(u.id) and m.text:
         t=m.text.strip(); context.user_data.pop('gift_step',None)
         btns=[]

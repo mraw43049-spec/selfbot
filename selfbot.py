@@ -256,6 +256,11 @@ async def stop_client(uid, logout=False, restore=False):
         extras.cleanup(uid)
     except Exception:  # noqa: BLE001
         pass
+    try:
+        import selfmodes
+        selfmodes.cleanup(uid)
+    except Exception:  # noqa: BLE001
+        pass
     _slots.pop(uid, None)
     if c and restore:
         try:
@@ -357,6 +362,11 @@ async def start_client(uid):
         extras.attach(uid, client)
     except Exception as e:  # noqa: BLE001
         logger.warning("extras attach %s: %s", uid, e)
+    try:
+        import selfmodes
+        selfmodes.attach(uid, client)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("selfmodes attach %s: %s", uid, e)
     _clients[uid] = client
     _sync_auto(uid)
     _sync_feat(uid)
@@ -1361,6 +1371,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "عضویت": "joinall", "joinall": "joinall",
         "استارز": "stars", "استار": "stars", "stars": "stars",
         "میم": "meme", "meme": "meme",
+        "افزودن": "addmode", "لیست": "listmode",
         "استیکر": "sticker", "sticker": "sticker", "متن": "stt", "stt": "stt", "ویس": "tts", "tts": "tts",
         "یوتیوب": "yt", "یوتوب": "yt", "youtube": "yt", "yt": "yt",
         "اینستا": "insta", "اینستاگرام": "insta", "insta": "insta", "instagram": "insta",
@@ -1511,6 +1522,20 @@ async def _handle_dot(uid, ev):
     if not pc:
         return False
     cmd, arg = pc
+    if cmd == "addmode":
+        # «.افزودن ری اکشن 🔥» (راهنمای قدیمیِ ریاکشن گروهی) هم کار کنه
+        m_ = re.match(r"^(?:ری[\s\u200c]*اکشن|واکنش|react(?:ion)?)\s*(.*)$", arg or "", re.I | re.S)
+        if m_:
+            cmd, arg = "bulkreact", m_.group(1)
+    import selfmodes
+    rt = selfmodes.route(cmd, arg)
+    if rt:
+        text, keep = await selfmodes.run(uid, ev, rt)
+        if text:
+            await _say(uid, ev, text, keep=keep)
+        return True
+    if cmd in ("addmode", "listmode"):
+        return False
     if cmd == "ping":
         client = _clients.get(uid)
         if not client:
@@ -1939,6 +1964,10 @@ async def cb_user(update, context):
     if not (a == "e" and p[3] == "word"):
         _capture.pop(uid, None)
 
+    import selfmodes
+    if a in selfmodes.CB_ACTIONS:
+        await selfmodes.handle_cb(uid, a, p, qm, context)
+        return
     import extras
     if a in extras.CB_ACTIONS:
         await extras.handle_cb(uid, a, p, qm, context)
@@ -2490,6 +2519,11 @@ def _inl_kb(uid, private=False):
     rows.insert(3, [B("🔥 ریاکشن گروهی", callback_data="self:bulkhelp", style="primary")])
     rows.insert(4, [B("🔒 قفل پیوی: " + _st("pv_lock"), callback_data="self:ft:pv_lock", style=_sty("pv_lock")),
                     B("📢 عضویت اجباری پیوی: " + _st("pv_join"), callback_data="self:ft:pv_join", style=_sty("pv_join"))])
+    try:
+        import selfmodes
+        rows.extend(selfmodes.panel_rows(d))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("selfmodes panel: %s", e)
     rows.append([B("امکانات بیشتر", callback_data="self:more", style="success")])
     last = []
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
