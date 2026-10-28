@@ -278,9 +278,65 @@ def refund_unfinished():
         logger.warning("dice: %s بازی نیمه‌کاره بعد از ری‌استارت به صاحباشون برگشت", n)
 
 
+# ---------- انتقال الماس توی گروه: ریپلای روی کاربر + «انتقال 20» ----------
+_TR_RE = re.compile(r"^\s*انتقال\s+([0-9۰-۹٠-٩]+(?:[.,٫][0-9۰-۹٠-٩]+)?)\s*$")
+
+
+def _transfer(src_id, dst_id, amount):
+    """اتمیک: اگه موجودی کافی بود کم و اضافه می‌کنه."""
+    import time as _t
+    s = get_session()
+    try:
+        src = s.get(Wallet, src_id)
+        if not src or Decimal(src.balance or 0) < amount:
+            return False
+        dst = s.get(Wallet, dst_id)
+        if not dst:
+            dst = Wallet(user_id=dst_id, balance=Decimal("0.0"), last_charge=int(_t.time()))
+            s.add(dst)
+        src.balance = Decimal(src.balance) - amount
+        dst.balance = Decimal(dst.balance or 0) + amount
+        s.commit()
+        return True
+    finally:
+        s.close()
+
+
+async def on_transfer(update, context):
+    m = update.effective_message
+    u = update.effective_user
+    if not m or not u or not m.text:
+        return
+    mt = _TR_RE.match(m.text)
+    if not mt:
+        return
+    rep = m.reply_to_message
+    to = rep.from_user if rep else None
+    if not to:
+        await m.reply_text("↩️ روی پیام کاربری که می‌خوای الماس بدی ریپلای کن و بنویس: انتقال 20")
+        return
+    if to.is_bot or to.id == u.id:
+        await m.reply_text("❌ نمی‌تونی به خودت یا یه ربات الماس منتقل کنی.")
+        return
+    raw = mt.group(1).translate(_DIG).replace(",", ".").replace("٫", ".")
+    try:
+        amount = Decimal(raw)
+    except Exception:
+        amount = Decimal("0")
+    if amount <= 0 or amount * 10 != (amount * 10).to_integral_value():
+        await m.reply_text("❌ مقدار نامعتبره (حداکثر یک رقم اعشار). مثل: انتقال 20")
+        return
+    if not _transfer(u.id, to.id, amount):
+        await m.reply_text(f"❌ الماس کافی نداری. موجودی تو: {fmt_bal(_balance(u.id))} الماس")
+        return
+    await m.reply_text(f"✅ {fmt_bal(amount)} الماس از {_mention(u.id, _name(u))} به {_mention(to.id, _name(to))} منتقل شد.",
+                       parse_mode="HTML")
+
+
 def register(app):
     Base.metadata.create_all(__import__("database").engine)
     refund_unfinished()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS & filters.Regex(_RE), on_new), group=-11)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS & filters.Regex(_TR_RE), on_transfer), group=-11)
     app.add_handler(CallbackQueryHandler(on_join, pattern=r"^dice:j:"), group=-11)
     app.add_handler(CallbackQueryHandler(on_cancel, pattern=r"^dice:c:"), group=-11)
