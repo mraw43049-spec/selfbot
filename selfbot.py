@@ -1317,6 +1317,10 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "ویدیو": "vnote", "ویدیومسیج": "vnote", "گرد": "vnote", "vnote": "vnote",
         "عضویت": "joinall", "joinall": "joinall",
         "استارز": "stars", "استار": "stars", "stars": "stars",
+        "یوتیوب": "yt", "یوتوب": "yt", "youtube": "yt", "yt": "yt",
+        "اینستا": "insta", "اینستاگرام": "insta", "insta": "insta", "instagram": "insta",
+        "تیک": "tiktok", "تیکتاک": "tiktok", "tiktok": "tiktok", "tt": "tiktok",
+        "پینترست": "pinterest", "پینترس": "pinterest", "pinterest": "pinterest",
         "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}

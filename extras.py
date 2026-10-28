@@ -13,6 +13,7 @@ from collections import OrderedDict
 import selfbot as sb
 import selftools as tools
 import selfmore as more
+import selfdl as dl
 
 logger = logging.getLogger("selfextras")
 
@@ -32,7 +33,7 @@ TOGGLES = ("ar_on", "del_on", "ttl_on", "mn_on", "wl_on", "mu_on")
 CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del", "tg")
 TEXT_STEPS = ("ar_text", "wl_add", "mu_add")
 CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story", "balance", "stars",
-             "info", "autorep", "welcome", "card", "vnote", "joinall")
+             "info", "autorep", "welcome", "card", "vnote", "joinall", "yt", "insta", "tiktok", "pinterest")
 STAR_WORDS = ("استارز", "استار", "ستاره", "stars", "star")
 
 
@@ -44,8 +45,8 @@ TOOL_GUIDES = {
              "پشتیبانی: جمع، تفریق، ضرب، تقسیم، توان ^ ، درصدِ باقی‌مانده % ، sqrt / abs / round / ln / log و اعداد فارسی."),
     "price": ("قیمت", "خلاصهٔ قیمت‌ها:\n<code>.قیمت</code>\nارز، طلا و سکه:\n<code>.قیمت دلار</code>\nیورو، پوند، درهم، لیر، طلا، سکه\n"
               "ارز دیجیتال:\n<code>.قیمت بیتکوین</code>\nاتریوم، تتر، تون، ریپل، سولانا، دوج، ترون، بایننس\nقیمت ارز/طلا به تومان نشون داده می‌شه."),
-    "info": ("اطلاعات کاربر", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.اطلاعات</code>\nیا:\n<code>.اطلاعات @یوزرنیم</code>\nآیدی، یوزرنیم، بیو، آخرین بازدید، گروه مشترک و ... رو نشون می‌ده."),
-    "me": ("حساب من", "بنویس:\n<code>.حساب من</code>\nمشخصات اکانت خودت: آیدی، شماره، پرمیوم، استارز، تعداد چت و مخاطب و نشست‌های فعال."),
+    "info": ("اطلاعات کاربر", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.اطلاعات</code>\nیا:\n<code>.اطلاعات @یوزرنیم</code>\nآیدی، قدمت اکانت (سال ساخت، تخمینی از روی آیدی)، یوزرنیم، بیو، آخرین بازدید، گروه مشترک و ... رو نشون می‌ده."),
+    "me": ("حساب من", "بنویس:\n<code>.حساب من</code>\nمشخصات اکانت خودت: آیدی، قدمت اکانت (سال ساخت تخمینی)، شماره، پرمیوم، استارز، تعداد چت و مخاطب و نشست‌های فعال."),
     "autorep": ("اتو ریپ", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.اتو ریپ سلام 50</code>\nمتن رو به‌صورت ریپلای همون‌قدر می‌فرسته (حداکثر 100، با فاصلهٔ 1.5 ثانیه).\nتوقف:\n<code>.اتو ریپ توقف</code>\n⚠️ تعداد زیاد ممکنه تلگرام محدودیت بده."),
     "welcome": ("خوشامدگویی", "توی گروه بنویس:\n<code>.خوشامد</code>\nبعد از اون هر عضو جدید خوشامد می‌گیره. متن: <code>.خوشامد متن سلام {نام} خوش اومدی</code>\nخاموش: <code>.خوشامد خاموش</code>\nتلگرام توی گروه‌های خیلی شلوغ ورود اعضا رو همیشه نمی‌فرسته."),
     "card": ("کارت بانکی", "ذخیره:\n<code>.کارت ذخیره 6037 9918 1234 5678 به‌نام فلانی</code>\nارسال:\n<code>.کارت</code>\nحذف:\n<code>.کارت حذف</code>\nشماره رمزنگاری‌شده ذخیره می‌شه؛ ذخیره‌اش رو توی Saved Messages بنویس."),
@@ -56,12 +57,20 @@ TOOL_GUIDES = {
     "short": ("کوتاه‌کردن لینک", "بنویس:\n<code>.کوتاه https://example.com</code>\nیا روی پیام لینک‌دار ریپلای کن و <code>.کوتاه</code> بفرست (تا ۳ لینک)."),
     "story": ("ذخیرهٔ استوری", "روی استوری فورواردی/منشن‌شده ریپلای کن و بنویس:\n<code>.استوری</code>\nیا با لینک:\n<code>.استوری t.me/username/s/123</code>\n"
               "توی Saved Messages ذخیره می‌شه. استوری «محافظت از محتوا» ذخیره نمی‌شه."),
+    "dl": ("دانلودر", "<b>یوتیوب</b> (توی Saved Messages ذخیره می‌شه):\n<code>.یوتیوب لینک</code>\n<code>.youtube لینک</code>\n"
+           "کیفیت مشخص: <code>.یوتیوب 720 لینک</code>\nهمهٔ کیفیت‌های موجود: <code>.یوتیوب همه لینک</code>\n"
+           "لیست کیفیت‌ها: <code>.یوتیوب لیست لینک</code>\nفقط صدا: <code>.یوتیوب صدا لینک</code>\n\n"
+           "<b>اینستاگرام</b> (پست، ریلز، استوری؛ توی همون چت):\n<code>.اینستا لینک</code>\n<code>.insta لینک</code>\n\n"
+           "<b>تیک‌تاک</b> (توی همون چت):\n<code>.تیک تاک لینک</code>\n<code>.tiktok لینک</code>\n\n"
+           "<b>پینترست</b> (توی همون چت):\n<code>.پینترست لینک</code>\n<code>.pinterest لینک</code>\n\n"
+           "به‌جای نوشتن لینک می‌تونی روی پیام لینک‌دار ریپلای کنی و فقط دستور رو بنویسی.\n"
+           "⚠️ استوری اینستا و بعضی لینک‌ها (و یوتیوب روی بعضی سرورها) به کوکی اکانت نیاز دارن؛ مدیر ربات باید متغیرهای YT_COOKIES / IG_COOKIES رو تنظیم کنه."),
     "save": ("ذخیرهٔ مدیا", "روی عکس/ویدیو/فایل ریپلای کن و بنویس:\n<code>.ذخیره</code>\nتوی Saved Messages ذخیره می‌شه."),
     "emoji": ("ایموجی پریمیوم", "بنویس:\n<code>.ایموجی متن</code>\nمتنت با ایموجی پریمیوم فرستاده می‌شه."),
     "mute": ("سکوت", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.سکوت</code>\nبرداشتن:\n<code>.رفع سکوت</code>\nلیست و دکمهٔ روشن/خاموش از «امکانات بیشتر» ← مدیریت سکوت."),
     "block": ("بلاک سریع", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.بلاک</code>\nرفع بلاک:\n<code>.رفع بلاک</code>\nبلاک واقعی تلگرام انجام می‌شه."),
 }
-TOOL_ORDER = ("tr", "tag", "calc", "me", "info", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block",
+TOOL_ORDER = ("tr", "tag", "dl", "calc", "me", "info", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block",
               "autorep", "welcome", "card", "vnote", "joinall")
 
 _cache = {}      # uid -> OrderedDict[msg_id -> rec]
@@ -648,6 +657,8 @@ async def _cmd_stars(uid):
 
 async def _dispatch(uid, ev, cmd, arg):
     """→ (متن، نگه‌داشتن پیام). نگه‌داشتن=True یعنی جواب بعد از ۱۰ ثانیه پاک نشود."""
+    if cmd in dl.CMDS:
+        return await dl.run(uid, ev, cmd, arg)
     if cmd in more.CMDS:
         return await more.run(uid, ev, cmd, arg)
     if cmd == "mute":

@@ -6,3 +6,5 @@ telethon>=1.40
 cryptography>=42
 tzdata
 imageio-ffmpeg>=0.5
+yt-dlp[default]>=2025.10.22
+gallery-dl>=1.30

@@ -57,6 +57,68 @@ def _status(st):
             "UserStatusLastMonth": "ماه اخیر"}.get(n, "مخفی")
 
 
+# ---------- قدمت اکانت ----------
+# تلگرام تاریخ ساخت اکانت رو نمی‌ده؛ از روی آیدی عددی (که تقریباً با زمان صعودیه) تخمین زده می‌شه.
+# جدول (آیدی، سال-ماه) تقریبیه؛ دقت در حد «سال» قابل‌اتکاست. با اکانت‌های با تاریخ مشخص چک و اصلاحش کن.
+_AGE_ANCHORS = [
+    (1_000_000, "2013-09"), (100_000_000, "2015-03"), (200_000_000, "2016-05"), (400_000_000, "2017-10"),
+    (700_000_000, "2019-03"), (1_000_000_000, "2020-05"), (1_500_000_000, "2021-02"), (2_000_000_000, "2021-10"),
+    (5_000_000_000, "2022-01"), (6_000_000_000, "2022-10"), (7_000_000_000, "2023-10"), (7_500_000_000, "2024-10"),
+    (8_000_000_000, "2025-04"),
+]
+
+
+def _g2j(gy, gm, gd):
+    """میلادی → شمسی (الگوریتم استاندارد jalaali)."""
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 + gd + g_d_m[gm - 1]
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    jm = 1 + days // 31 if days < 186 else 7 + (days - 186) // 30
+    jd = 1 + days % 31 if days < 186 else 1 + (days - 186) % 30
+    return jy, jm, jd
+
+
+def est_creation(user_id):
+    """→ (datetime تقریبی، «جدیدتر از آخرین نقطه» هست؟)"""
+    from datetime import datetime
+    pts = [(i, datetime.strptime(d, "%Y-%m").replace(tzinfo=timezone.utc).timestamp()) for i, d in _AGE_ANCHORS]
+    uid = int(user_id)
+    if uid <= pts[0][0]:
+        ts, newer = pts[0][1], False
+    elif uid >= pts[-1][0]:
+        ts, newer = pts[-1][1], True
+    else:
+        ts, newer = pts[-1][1], False
+        for (i0, t0), (i1, t1) in zip(pts, pts[1:]):
+            if i0 <= uid <= i1:
+                ts = t0 + (t1 - t0) * (uid - i0) / (i1 - i0)
+                break
+    return datetime.fromtimestamp(ts, tz=timezone.utc), newer
+
+
+def age_line(user_id):
+    from datetime import datetime
+    try:
+        dt, newer = est_creation(user_id)
+    except Exception:  # noqa: BLE001
+        return ""
+    now = datetime.now(timezone.utc)
+    months = max((now.year - dt.year) * 12 + now.month - dt.month, 0)
+    y, m = divmod(months, 12)
+    jy = _g2j(dt.year, dt.month, dt.day or 1)[0]
+    age = (f"{y} سال" if y else "") + (" و " if y and m else "") + (f"{m} ماه" if m or not y else "")
+    pre = "حدود سال" if not newer else "سال"
+    tail = " یا جدیدتر" if newer else ""
+    return f"📅 ساخت اکانت: {pre} {dt.year} میلادی ({jy} شمسی){tail} — حدود {age} (تخمینی)"
+
+
 # ---------- .اطلاعات ----------
 async def cmd_info(uid, ev, arg):
     client = sb._clients.get(uid)
@@ -99,6 +161,8 @@ async def cmd_info(uid, ev, arg):
                              ("👥 مخاطب", getattr(ent, "contact", False)), ("⛔ بلاک‌شده", blocked),
                              ("🗑 حذف‌شده", getattr(ent, "deleted", False))) if ok]
     lines = [f"👤 {_nm(ent)}", f"🆔 {ent.id}"]
+    if not ent.bot:
+        lines.append(age_line(ent.id))
     if un:
         lines.append("🔗 " + " ".join(un))
     if ent.phone:
@@ -124,7 +188,7 @@ async def cmd_account(uid):
     un = [("@" + u.username) for u in (getattr(me, "usernames", None) or []) if getattr(u, "username", None)]
     if not un and me.username:
         un = ["@" + me.username]
-    lines = [f"👤 {_nm(me)}", f"🆔 {me.id}"]
+    lines = [f"👤 {_nm(me)}", f"🆔 {me.id}", age_line(me.id)]
     if un:
         lines.append("🔗 " + " ".join(un))
     if me.phone:
