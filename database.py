@@ -20,6 +20,8 @@ if DATABASE_URL.startswith("postgresql://"):
         DATABASE_URL = "sqlite:///self.db"
 
 _is_sqlite = DATABASE_URL.startswith("sqlite")
+if _is_sqlite:
+    logger.warning("DATABASE_URL تنظیم نشده؛ از SQLite محلی استفاده می‌شه و با هر دیپلوی همهٔ سشن‌ها و تنظیمات پاک می‌شن!")
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,

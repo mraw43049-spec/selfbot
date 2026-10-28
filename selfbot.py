@@ -284,15 +284,38 @@ async def start_client(uid):
     if not (row and row.enabled and row.session_enc):
         return False
     await stop_client(uid)
+    from telethon import errors as _te
+    dead = tuple(getattr(_te, n) for n in ("AuthKeyDuplicatedError", "AuthKeyUnregisteredError", "SessionRevokedError",
+                                           "SessionExpiredError", "UserDeactivatedError", "UserDeactivatedBanError")
+                 if hasattr(_te, n))
+    client = None
     try:
         client = TelegramClient(StringSession(dec(row.session_enc)), API_ID, API_HASH)
         await client.connect()
-        if not await client.is_user_authorized():
-            save_row(uid, session_enc=None)
+        me = await client.get_me()
+        if me is None:
+            raise _te.AuthKeyUnregisteredError(None)
+    except dead as e:
+        # فقط خطاهای قطعیِ «نشست باطل شده» نشست رو پاک می‌کنن (مثلاً وقتی دو سرور همزمان با یک نشست وصل شدن)
+        logger.warning("self session dead %s: %s %s", uid, type(e).__name__, e)
+        save_row(uid, session_enc=None)
+        try:
             await client.disconnect()
-            return False
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await _botref[0].send_message(uid, "⚠️ نشست اکانتت از سمت تلگرام باطل شد و باید دوباره وصل کنی (/self ← اتصال اکانت).")
+        except Exception:  # noqa: BLE001
+            pass
+        return False
     except Exception as e:  # noqa: BLE001
-        logger.warning("self start failed %s: %s", uid, e)
+        # خطای موقت (شبکه، فلود، ...): نشست دست‌نخورده می‌مونه و بعداً دوباره تلاش می‌شه
+        logger.warning("self start failed (session kept) %s: %s %s", uid, type(e).__name__, e)
+        try:
+            if client:
+                await client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
         return False
     _load_runtime(uid, row)
 
@@ -537,7 +560,7 @@ async def _auto_fire(uid, client, s):
 # مجوز فقط از پنل پشتیبانی/مدیر داده می‌شه. روشن‌کردن توی گپ: «.کار روشن» / «.درس روشن» (هرکدوم فقط توی یک گپ).
 #   کار : هر ۱۲.۳ ثانیه «کار» می‌فرسته و دکمهٔ وسط رو می‌زنه.
 #   درس : هر ۷ دقیقه «روباهیو درس» می‌فرسته، دکمهٔ «ریاضی» رو می‌زنه و بعدش دکمهٔ دوم رو.
-LESSON_WORD = "روباهیو درس"
+LESSON_WORD = "درس"
 LESSON_TOPIC = "ریاضی"
 FEATS = {
     "work": {"model": SelfWork, "label": "کار", "word": "کار", "interval": 12.3},
@@ -760,11 +783,20 @@ async def start_all(app):
         s.close()
 
     async def _go():
+        # بعد از دیپلوی، چند ثانیه صبر می‌کنیم تا نمونهٔ قبلیِ ربات کامل بسته بشه؛ اگه دو نمونه همزمان با یک نشست وصل بشن
+        # تلگرام نشست رو باطل می‌کنه و کاربر مجبور می‌شه دوباره وصل کنه.
+        await asyncio.sleep(max(0, int(os.environ.get("SELF_START_DELAY", "25") or 0)))
         for uid in ids:
-            try:
-                await start_client(uid)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("self autostart %s: %s", uid, e)
+            for attempt in range(3):
+                try:
+                    if await start_client(uid):
+                        break
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("self autostart %s: %s", uid, e)
+                row = get_row(uid)
+                if not (row and row.enabled and row.session_enc):
+                    break
+                await asyncio.sleep(20)
             await asyncio.sleep(1.5)
     asyncio.create_task(_go())
 
