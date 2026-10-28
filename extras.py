@@ -14,6 +14,7 @@ import selfbot as sb
 import selftools as tools
 import selfmore as more
 import selfdl as dl
+import selfmedia as media
 
 logger = logging.getLogger("selfextras")
 
@@ -33,7 +34,7 @@ TOGGLES = ("ar_on", "del_on", "ttl_on", "mn_on", "wl_on", "mu_on")
 CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del", "tg")
 TEXT_STEPS = ("ar_text", "wl_add", "mu_add")
 CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story", "balance", "stars",
-             "info", "autorep", "welcome", "card", "vnote", "joinall", "yt", "insta", "tiktok", "pinterest")
+             "info", "autorep", "welcome", "card", "vnote", "joinall", "yt", "insta", "tiktok", "pinterest", "sticker", "stt", "tts")
 STAR_WORDS = ("استارز", "استار", "ستاره", "stars", "star")
 
 
@@ -65,12 +66,25 @@ TOOL_GUIDES = {
            "<b>پینترست</b> (توی همون چت):\n<code>.پینترست لینک</code>\n<code>.pinterest لینک</code>\n\n"
            "به‌جای نوشتن لینک می‌تونی روی پیام لینک‌دار ریپلای کنی و فقط دستور رو بنویسی.\n"
            "⚠️ استوری اینستا و بعضی لینک‌ها (و یوتیوب روی بعضی سرورها) به کوکی اکانت نیاز دارن؛ مدیر ربات باید متغیرهای YT_COOKIES / IG_COOKIES رو تنظیم کنه."),
+    "sticker": ("ساخت استیکر", "روی عکس، ویدیو، گیف، ویدیو مسیج یا متن ریپلای کن و بنویس:\n<code>.استیکر</code>\n"
+                "همون پیام به استیکر تبدیل می‌شه و به‌صورت ریپلای فرستاده می‌شه.\n"
+                "• ویدیو: استیکر ویدیویی (فقط ۳ ثانیهٔ اول، بدون صدا)\n• متن: استیکر متنی سفید با حاشیهٔ مشکی\n"
+                "استیکر متنی بدون ریپلای:\n<code>.استیکر متن سلام</code>\n"
+                "روی یه استیکر ریپلای کنی و <code>.استیکر</code> بنویسی، به عکس (یا ویدیو) تبدیل می‌شه.\n"
+                "استیکر متحرک (TGS) پشتیبانی نمی‌شه."),
+    "stt": ("ویس به متن", "روی یه ویس یا ویدیو مسیج ریپلای کن و بنویس:\n<code>.متن ویس</code>\n"
+            "یا <code>.ویس به متن</code>\nمتن به‌صورت ریپلای روی ویس فرستاده می‌شه.\n"
+            "⚠️ از رونویسی خود تلگرام استفاده می‌کنه؛ با اکانت پرمیوم بدون محدودیته و اکانت عادی فقط سهمیهٔ رایگان محدود داره."),
+    "tts": ("متن به ویس", "بنویس:\n<code>.ویس سلام چطوری</code>\nصدای مرد: <code>.ویس مرد سلام</code>\nصدای زن: <code>.ویس زن سلام</code>\n"
+            "سرعت: <code>.ویس سریع سلام</code> یا <code>.ویس آهسته سلام</code>\n"
+            "یا روی یه متن ریپلای کن و فقط بنویس: <code>.ویس</code>\n"
+            "فارسی یا انگلیسی خودکار تشخیص داده می‌شه (حداکثر ۵۰۰ حرف). از سرویس Edge TTS استفاده می‌کنه و سرور باید اینترنت داشته باشه."),
     "save": ("ذخیرهٔ مدیا", "روی عکس/ویدیو/فایل ریپلای کن و بنویس:\n<code>.ذخیره</code>\nتوی Saved Messages ذخیره می‌شه."),
     "emoji": ("ایموجی پریمیوم", "بنویس:\n<code>.ایموجی متن</code>\nمتنت با ایموجی پریمیوم فرستاده می‌شه."),
     "mute": ("سکوت", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.سکوت</code>\nبرداشتن:\n<code>.رفع سکوت</code>\nلیست و دکمهٔ روشن/خاموش از «امکانات بیشتر» ← مدیریت سکوت."),
     "block": ("بلاک سریع", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.بلاک</code>\nرفع بلاک:\n<code>.رفع بلاک</code>\nبلاک واقعی تلگرام انجام می‌شه."),
 }
-TOOL_ORDER = ("tr", "tag", "dl", "calc", "me", "info", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block",
+TOOL_ORDER = ("tr", "tag", "dl", "sticker", "stt", "tts", "calc", "me", "info", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block",
               "autorep", "welcome", "card", "vnote", "joinall")
 
 _cache = {}      # uid -> OrderedDict[msg_id -> rec]
@@ -659,6 +673,8 @@ async def _dispatch(uid, ev, cmd, arg):
     """→ (متن، نگه‌داشتن پیام). نگه‌داشتن=True یعنی جواب بعد از ۱۰ ثانیه پاک نشود."""
     if cmd in dl.CMDS:
         return await dl.run(uid, ev, cmd, arg)
+    if cmd in media.CMDS:
+        return await media.run(uid, ev, cmd, arg)
     if cmd in more.CMDS:
         return await more.run(uid, ev, cmd, arg)
     if cmd == "mute":
