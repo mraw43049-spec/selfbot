@@ -558,12 +558,12 @@ async def _auto_fire(uid, client, s):
 
 # ---------- قابلیت‌های زمان‌بندی‌شده «کار» و «درس» ----------
 # مجوز فقط از پنل پشتیبانی/مدیر داده می‌شه. روشن‌کردن توی گپ: «.کار روشن» / «.درس روشن» (هرکدوم فقط توی یک گپ).
-#   کار : هر ۱۲.۳ ثانیه «کار» می‌فرسته و دکمهٔ وسط رو می‌زنه.
+#   کار : هر ۱۲ دقیقه و ۱۰ ثانیه «کار» می‌فرسته و دکمهٔ وسط رو می‌زنه.
 #   درس : هر ۷ دقیقه «روباهیو درس» می‌فرسته، دکمهٔ «ریاضی» رو می‌زنه و بعدش دکمهٔ دوم رو.
 LESSON_WORD = "درس"
 LESSON_TOPIC = "ریاضی"
 FEATS = {
-    "work": {"model": SelfWork, "label": "کار", "word": "کار", "interval": 12.3},
+    "work": {"model": SelfWork, "label": "کار", "word": "کار", "interval": 730.0},
     "lesson": {"model": SelfLesson, "label": "درس", "word": LESSON_WORD, "interval": 420.0},
 }
 _feat_tasks = {}   # (uid, kind) -> تسک
@@ -707,7 +707,10 @@ async def _feat_loop(uid, kind):
 
 def _fmt_interval(kind):
     n = FEATS[kind]["interval"]
-    return f"{int(n // 60)} دقیقه" if n >= 60 else f"{n:g} ثانیه"
+    m, sec = divmod(int(n), 60)
+    if m and sec:
+        return f"{m} دقیقه و {sec} ثانیه"
+    return f"{m} دقیقه" if m else f"{sec} ثانیه"
 
 
 def _feat_what(kind):
