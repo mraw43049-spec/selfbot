@@ -322,6 +322,33 @@ async def start_client(uid):
     async def _h(ev, _uid=uid):
         await _on_out(_uid, ev)
     client.add_event_handler(_h, events.NewMessage(outgoing=True))
+
+    async def _pv_guard(ev, _uid=uid, _client=client):
+        # کنترل‌های پیوی فقط روی پیام‌های ورودیِ پیوی اعمال می‌شوند.
+        try:
+            d = _pget(_uid)
+            if not ev.is_private or ev.sender_id == _uid:
+                return
+            if d.get("pv_lock"):
+                await ev.delete()
+                return
+            if d.get("pv_join"):
+                channels = [x.strip().lstrip("@") for x in os.environ.get("SELF_PV_JOIN_CHANNELS", "selfsaz_iran,fox_frenzy").split(",") if x.strip()]
+                missing = []
+                for channel in channels[:5]:
+                    try:
+                        ent = await _client.get_entity(channel)
+                        await _client.get_permissions(ent, ev.sender_id)
+                    except Exception:
+                        missing.append(channel)
+                if missing:
+                    links = "\n".join("https://t.me/" + x for x in missing)
+                    await ev.reply("برای گفتگو، اول عضو کانال‌های زیر شو و دوباره پیام بده:\n" + links)
+                    await ev.delete()
+        except Exception as exc:
+            logger.info("private guard %s: %s", _uid, exc)
+
+    client.add_event_handler(_pv_guard, events.NewMessage(incoming=True))
     async def _raw_typing(update, _uid=uid, _client=client):
         await _mirror_typing(_uid, _client, update)
     client.add_event_handler(_raw_typing, events.Raw)
@@ -832,6 +859,12 @@ CLOCK_FONTS = [
     ("فول‌وید", "０１２３４５６７８９", "："),
     ("فارسی", "۰۱۲۳۴۵۶۷۸۹", ":"),
     ("بالانویس", "⁰¹²³⁴⁵⁶⁷⁸⁹", ":"),
+    ("زیرنویس", "₀₁₂₃₄₅₆₇₈₉", ":"),
+    ("دایره مشکی", "⓿➊➋➌➍➎➏➐➑➒", ":"),
+    ("فراکتور", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵", "·"),
+    ("سریف بولد", "𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗", "⁚"),
+    ("تمام‌عرض نقطه", "０１２３４５６７８９", "．"),
+    ("مونواسپیس نقطه", "𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿", "·"),
 ]
 CLOCK_TZ = os.environ.get("SELF_TZ", "Asia/Tehran").strip() or "Asia/Tehran"
 _clock_tasks = {}
@@ -1322,7 +1355,9 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "اینستا": "insta", "اینستاگرام": "insta", "insta": "insta", "instagram": "insta",
         "تیک": "tiktok", "تیکتاک": "tiktok", "tiktok": "tiktok", "tt": "tiktok",
         "پینترست": "pinterest", "پینترس": "pinterest", "pinterest": "pinterest",
-        "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson"}
+        "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson",
+        "پینگ": "ping", "ping": "ping", "حذفپیام": "delmsg", "حذف": "delmsg", "delmsg": "delmsg",
+        "افزودنریاکشن": "bulkreact", "bulkreact": "bulkreact"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1465,6 +1500,71 @@ async def _handle_dot(uid, ev):
     if not pc:
         return False
     cmd, arg = pc
+    if cmd == "ping":
+        client = _clients.get(uid)
+        if not client:
+            await _say(uid, ev, "🏓 اکانت سلف وصل نیست.")
+        else:
+            started = time.perf_counter()
+            try:
+                await client.get_me()
+                ms = max(1, int((time.perf_counter() - started) * 1000))
+                await _say(uid, ev, f"🏓 پینگ سلف: {ms} ms")
+            except Exception as exc:
+                await _say(uid, ev, "❌ پینگ ناموفق بود: " + str(exc)[:100])
+        return True
+    if cmd == "delmsg":
+        if not ev.is_reply:
+            await _say(uid, ev, "🗑 برای حذف پیام، روی پیام موردنظر ریپلای کن و بنویس .حذف پیام")
+            return True
+        try:
+            r = await ev.get_reply_message()
+            if r:
+                await r.delete()
+            try: await ev.delete()
+            except Exception: pass
+        except Exception as exc:
+            await _say(uid, ev, "❌ حذف پیام انجام نشد: " + str(exc)[:100])
+        return True
+    if cmd == "bulkreact":
+        if not ev.is_reply:
+            await _say(uid, ev, "🔥 روی پیام کاربر ریپلای کن و بنویس: .افزودن ری اکشن 🔥")
+            return True
+        client = _clients.get(uid)
+        if not client:
+            await _say(uid, ev, "❌ اول اکانت سلف را وصل کن.")
+            return True
+        emos = _EMO_RE.findall(arg or "")
+        emoji = (emos[0].replace("\ufe0f", "") if emos else "🔥")
+        try:
+            from telethon.tl.functions.messages import SendReactionRequest
+            from telethon.tl.types import ReactionEmoji
+            reply = await ev.get_reply_message()
+            target = await reply.get_sender() if reply else None
+            if not target:
+                await _say(uid, ev, "❌ فرستندهٔ پیام پیدا نشد.")
+                return True
+            done = 0
+            async for msg in client.iter_messages(ev.chat_id, limit=200):
+                if msg.id == ev.id:
+                    continue
+                sender = await msg.get_sender()
+                if getattr(sender, "id", None) == getattr(target, "id", None):
+                    try:
+                        await client(SendReactionRequest(peer=ev.chat_id, msg_id=msg.id,
+                                                         reaction=[ReactionEmoji(emoticon=emoji)]))
+                        done += 1
+                        await asyncio.sleep(0.8)
+                    except Exception as ex:
+                        logger.info("bulk reaction skipped message %s: %s", msg.id, ex)
+                    if done >= 20:
+                        break
+            try: await ev.delete()
+            except Exception: pass
+            await client.send_message(ev.chat_id, f"🔥 ریاکشن {emoji} روی {done} پیام اخیر کاربر اعمال شد (سقف هر بار: ۲۰ پیام).")
+        except Exception as exc:
+            await _say(uid, ev, "❌ ریاکشن گروهی انجام نشد: " + str(exc)[:100])
+        return True
     if cmd == "translate":
         if not ev.is_reply:
             await _say(uid, ev, "روی متن موردنظر ریپلای کن و بعد .ترجمه را بفرست.")
@@ -1841,7 +1941,25 @@ async def cb_user(update, context):
         t, kb = _panel(uid, q.from_user.first_name or "")
         await qm.edit_text(t, reply_markup=kb)
 
-    if a == "home":
+    if a == "ping":
+        client = _clients.get(uid)
+        if not client:
+            await q.answer("اول اکانت سلف را وصل کن.", show_alert=True)
+        else:
+            started = time.perf_counter()
+            try:
+                await client.get_me()
+                await q.answer(f"پینگ: {max(1, int((time.perf_counter()-started)*1000))} ms", show_alert=True)
+            except Exception as exc:
+                await q.answer("پینگ ناموفق: " + str(exc)[:100], show_alert=True)
+        return
+    elif a == "delhelp":
+        await qm.edit_text("🗑 حذف پیام\nروی پیام موردنظر ریپلای کن و از اکانت سلف بنویس: .حذف پیام",
+                           reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
+    elif a == "bulkhelp":
+        await qm.edit_text("🔥 ریاکشن گروهی\nروی یکی از پیام‌های کاربر ریپلای کن و بنویس: .افزودن ری اکشن 🔥\nبرای هر بار حداکثر ۲۰ پیام اخیر همان کاربر بررسی می‌شود تا از فلود جلوگیری شود.",
+                           reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
+    elif a == "home":
         await home()
     elif a == "tog":
         r = get_row(uid)
@@ -2356,6 +2474,11 @@ def _inl_kb(uid, private=False):
         trow.append(B("حذف مقصد", callback_data="self:typing_clear", style="danger"))
     rows.insert(3, trow)
     rows.insert(4, [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts", style="primary")])
+    rows.insert(2, [B("🏓 پینگ", callback_data="self:ping", style="primary"),
+                    B("🗑 حذف پیام", callback_data="self:delhelp", style="danger")])
+    rows.insert(3, [B("🔥 ریاکشن گروهی", callback_data="self:bulkhelp", style="primary")])
+    rows.insert(4, [B("🔒 قفل پیوی: " + _st("pv_lock"), callback_data="self:ft:pv_lock", style=_sty("pv_lock")),
+                    B("📢 عضویت اجباری پیوی: " + _st("pv_join"), callback_data="self:ft:pv_join", style=_sty("pv_join"))])
     rows.append([B("امکانات بیشتر", callback_data="self:more", style="success")])
     last = []
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
