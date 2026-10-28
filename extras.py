@@ -12,6 +12,7 @@ from collections import OrderedDict
 
 import selfbot as sb
 import selftools as tools
+import selfmore as more
 
 logger = logging.getLogger("selfextras")
 
@@ -30,7 +31,8 @@ TOOL_PER_MIN = 20             # سقف دستورهای ابزار در دقیق
 TOGGLES = ("ar_on", "del_on", "ttl_on", "mn_on", "wl_on", "mu_on")
 CB_ACTIONS = ("more", "mt", "ar_text", "wl", "wl_add", "wl_del", "mu", "mu_add", "mu_del", "tg")
 TEXT_STEPS = ("ar_text", "wl_add", "mu_add")
-CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story", "balance", "stars")
+CMD_WORDS = ("mute", "unmute", "block", "unblock", "undo", "calc", "price", "date", "short", "story", "balance", "stars",
+             "info", "autorep", "welcome", "card", "vnote", "joinall")
 STAR_WORDS = ("استارز", "استار", "ستاره", "stars", "star")
 
 
@@ -42,6 +44,13 @@ TOOL_GUIDES = {
              "پشتیبانی: جمع، تفریق، ضرب، تقسیم، توان ^ ، درصدِ باقی‌مانده % ، sqrt / abs / round / ln / log و اعداد فارسی."),
     "price": ("قیمت", "خلاصهٔ قیمت‌ها:\n<code>.قیمت</code>\nارز، طلا و سکه:\n<code>.قیمت دلار</code>\nیورو، پوند، درهم، لیر، طلا، سکه\n"
               "ارز دیجیتال:\n<code>.قیمت بیتکوین</code>\nاتریوم، تتر، تون، ریپل، سولانا، دوج، ترون، بایننس\nقیمت ارز/طلا به تومان نشون داده می‌شه."),
+    "info": ("اطلاعات کاربر", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.اطلاعات</code>\nیا:\n<code>.اطلاعات @یوزرنیم</code>\nآیدی، یوزرنیم، بیو، آخرین بازدید، گروه مشترک و ... رو نشون می‌ده."),
+    "me": ("حساب من", "بنویس:\n<code>.حساب من</code>\nمشخصات اکانت خودت: آیدی، شماره، پرمیوم، استارز، تعداد چت و مخاطب و نشست‌های فعال."),
+    "autorep": ("اتو ریپ", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.اتو ریپ سلام 50</code>\nمتن رو به‌صورت ریپلای همون‌قدر می‌فرسته (حداکثر 100، با فاصلهٔ 1.5 ثانیه).\nتوقف:\n<code>.اتو ریپ توقف</code>\n⚠️ تعداد زیاد ممکنه تلگرام محدودیت بده."),
+    "welcome": ("خوشامدگویی", "توی گروه بنویس:\n<code>.خوشامد</code>\nبعد از اون هر عضو جدید خوشامد می‌گیره. متن: <code>.خوشامد متن سلام {نام} خوش اومدی</code>\nخاموش: <code>.خوشامد خاموش</code>\nتلگرام توی گروه‌های خیلی شلوغ ورود اعضا رو همیشه نمی‌فرسته."),
+    "card": ("کارت بانکی", "ذخیره:\n<code>.کارت ذخیره 6037 9918 1234 5678 به‌نام فلانی</code>\nارسال:\n<code>.کارت</code>\nحذف:\n<code>.کارت حذف</code>\nشماره رمزنگاری‌شده ذخیره می‌شه؛ ذخیره‌اش رو توی Saved Messages بنویس."),
+    "vnote": ("ویدیو مسیج", "روی ویدیو یا گیف ریپلای کن و بنویس:\n<code>.ویدیو مسیج</code>\nبه ویدیو مسیج گرد (حداکثر 60 ثانیه) تبدیل و به‌صورت ریپلای فرستاده می‌شه."),
+    "joinall": ("عضویت همه", "روی پیام ربات عضویت اجباری (دکمه‌دار) ریپلای کن و بنویس:\n<code>.عضویت همه</code>\nتوی همهٔ کانال‌های دکمه‌ها عضو می‌شه، دکمهٔ تأیید رو می‌زنه و نتیجه رو نشون می‌ده (حداکثر 20 کانال)."),
     "stars": ("موجودی استارز", "موجودی استارز تلگرامِ اکانتت رو نشون می‌ده:\n<code>.موجودی استارز</code>\nاکانت سلف باید وصل باشه."),
     "date": ("تاریخ", "تاریخ شمسی، میلادی، قمری و ساعت تهران:\n<code>.تاریخ</code>\nتبدیل تاریخ:\n<code>.تاریخ 1405/8/5</code>\nیا\n<code>.تاریخ 2026-10-27</code>"),
     "short": ("کوتاه‌کردن لینک", "بنویس:\n<code>.کوتاه https://example.com</code>\nیا روی پیام لینک‌دار ریپلای کن و <code>.کوتاه</code> بفرست (تا ۳ لینک)."),
@@ -52,7 +61,8 @@ TOOL_GUIDES = {
     "mute": ("سکوت", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.سکوت</code>\nبرداشتن:\n<code>.رفع سکوت</code>\nلیست و دکمهٔ روشن/خاموش از «امکانات بیشتر» ← مدیریت سکوت."),
     "block": ("بلاک سریع", "روی پیام کاربر ریپلای کن و بنویس:\n<code>.بلاک</code>\nرفع بلاک:\n<code>.رفع بلاک</code>\nبلاک واقعی تلگرام انجام می‌شه."),
 }
-TOOL_ORDER = ("tr", "tag", "calc", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block")
+TOOL_ORDER = ("tr", "tag", "calc", "me", "info", "price", "stars", "date", "short", "story", "save", "emoji", "mute", "block",
+              "autorep", "welcome", "card", "vnote", "joinall")
 
 _cache = {}      # uid -> OrderedDict[msg_id -> rec]
 _ar_seen = {}    # uid -> {sender_id: ts}
@@ -151,6 +161,7 @@ def attach(uid, client):
     client.add_event_handler(_in, events.NewMessage(incoming=True))
     client.add_event_handler(_ed, events.MessageEdited(incoming=True))
     client.add_event_handler(_del, events.MessageDeleted())
+    more.attach(uid, client)
 
 
 async def _safe(coro):
@@ -411,7 +422,7 @@ async def handle_cb(uid, a, p, qm, context):
         if key in TOOL_GUIDES:
             title, body = TOOL_GUIDES[key]
             await qm.edit_text(f"<b>{title}</b>\n\n{body}", parse_mode="HTML",
-                               reply_markup=KB([[B("بازگشت", callback_data="self:more:2", style="primary")]]))
+                               reply_markup=KB([[B("بازگشت", callback_data=f"self:more:{2 + TOOL_ORDER.index(key) // 2 // MORE_ROWS_PER_PAGE}", style="primary")]]))
     elif a == "mt":
         key = p[2] if len(p) > 2 else ""
         page = int(p[3]) if len(p) > 3 and p[3].isdigit() else 1
@@ -637,6 +648,8 @@ async def _cmd_stars(uid):
 
 async def _dispatch(uid, ev, cmd, arg):
     """→ (متن، نگه‌داشتن پیام). نگه‌داشتن=True یعنی جواب بعد از ۱۰ ثانیه پاک نشود."""
+    if cmd in more.CMDS:
+        return await more.run(uid, ev, cmd, arg)
     if cmd == "mute":
         return await _cmd_mute(uid, ev, on=norm_arg(arg) not in ("خاموش", "off", "غیرفعال", "حذف"))
     if cmd == "unmute":
@@ -652,6 +665,9 @@ async def _dispatch(uid, ev, cmd, arg):
         if what in ("بلاک", "block"):
             return await _cmd_block(uid, ev, on=False)
         return "مثل: .رفع سکوت   یا   .رفع بلاک", False
+
+    if cmd == "calc" and norm_arg(arg) in ("من", "me", "my"):
+        return await more.cmd_account(uid)
 
     if cmd == "calc":
         expr = arg

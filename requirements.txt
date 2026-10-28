@@ -5,3 +5,4 @@ Pillow>=10.1
 telethon>=1.40
 cryptography>=42
 tzdata
+imageio-ffmpeg>=0.5
