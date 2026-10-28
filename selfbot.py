@@ -1874,10 +1874,11 @@ def _panel(uid, name=""):
 
 
 async def send_panel(bot, uid, name=""):
-    """پنل اصلی رو با بنر (اگه باشه) توی چت ربات می‌فرسته."""
-    cap, kb = _panel(uid, name)
+    """صفحهٔ اول پنل (بنر با عکس پروفایل کاربر + دکمهٔ «دستورات سلف») توی چت ربات."""
+    cap = _inl_caption(name, uid)
+    kb = _blue(_cover_kb(uid))
     url = os.environ.get("SELF_BANNER_URL", "").strip()
-    photo = url or _banner.get("file_id")
+    photo = await user_banner(uid, fresh=True) or url or _banner.get("file_id")
     if photo:
         try:
             return await bot.send_photo(uid, photo=photo, caption=cap[:1024], reply_markup=kb)
@@ -1895,7 +1896,7 @@ class _PhotoMsg:
 
     async def edit_text(self, text, reply_markup=None, parse_mode=None, **kw):
         try:
-            await self.m.edit_caption(caption=text[:1024], reply_markup=reply_markup, parse_mode=parse_mode)
+            await self.m.edit_caption(caption=text[:1024], reply_markup=_blue(reply_markup), parse_mode=parse_mode)
         except Exception as e:  # noqa: BLE001
             if "not modified" not in str(e).lower():
                 logger.info("photo panel edit: %s", e)
@@ -1999,7 +2000,7 @@ async def cb_user(update, context):
     elif a == "bulkhelp":
         await qm.edit_text("🔥 ریاکشن گروهی\nروی یکی از پیام‌های کاربر ریپلای کن و بنویس: .افزودن ری اکشن 🔥\nبرای هر بار حداکثر ۲۰ پیام اخیر همان کاربر بررسی می‌شود تا از فلود جلوگیری شود.",
                            reply_markup=KB([[B("بازگشت", callback_data="self:home")]]))
-    elif a == "home":
+    elif a in ("home", "cmds"):
         await home()
     elif a == "tog":
         r = get_row(uid)
@@ -2474,6 +2475,116 @@ async def prepare_banner(app):
         logger.warning("self banner: %s", e)
 
 
+# ---------- بنر شخصی: عکس پروفایل خود کاربر داخل دایرهٔ بنر ----------
+# فایل banner_base.png (همین عکس سلف روباهیو، ۱۲۸۰×۷۲۰) باید کنار selfbot.py باشه.
+_BASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banner_base.png")
+_CIRCLE = (300, 450, 198)       # مرکز x، مرکز y، شعاع دایرهٔ داخلی بنر
+_ub = {}                        # uid -> {"key": هش عکس, "fid": file_id, "ts": زمان بررسی}
+_ub_lock = asyncio.Lock()
+
+
+def _circle_banner(photo_bytes):
+    import io
+    from PIL import Image, ImageDraw
+    base = Image.open(_BASE_PATH).convert("RGB")
+    cx, cy, r = _CIRCLE
+    if photo_bytes:
+        ph = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+        w, h = ph.size
+        m = min(w, h)
+        ph = ph.crop(((w - m) // 2, (h - m) // 2, (w - m) // 2 + m, (h - m) // 2 + m)).resize((2 * r, 2 * r), Image.LANCZOS)
+        S = 4   # لبهٔ صاف دایره
+        mask = Image.new("L", (2 * r * S, 2 * r * S), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, 2 * r * S - 1, 2 * r * S - 1), fill=255)
+        mask = mask.resize((2 * r, 2 * r), Image.LANCZOS)
+        base.paste(ph, (cx - r, cy - r), mask)
+    buf = io.BytesIO()
+    base.save(buf, "JPEG", quality=92)
+    buf.seek(0)
+    return buf
+
+
+async def _profile_photo_bytes(uid):
+    client = _clients.get(uid)
+    if client:
+        try:
+            data = await client.download_profile_photo("me", file=bytes)
+            if data:
+                return bytes(data)
+        except Exception as e:  # noqa: BLE001
+            logger.info("profile photo (userbot) %s: %s", uid, e)
+    bot = _botref[0]
+    if bot:
+        try:
+            ps = await bot.get_user_profile_photos(uid, limit=1)
+            if ps and ps.total_count:
+                f = await bot.get_file(ps.photos[0][-1].file_id)
+                return bytes(await f.download_as_bytearray())
+        except Exception as e:  # noqa: BLE001
+            logger.info("profile photo (bot) %s: %s", uid, e)
+    return None
+
+
+async def user_banner(uid, fresh=False):
+    """file_id بنر مخصوص این کاربر (عکس پروفایل خودش داخل دایره). اگه نشد None → بنر پیش‌فرض."""
+    bot = _botref[0]
+    c = _ub.get(uid)
+    if c and not fresh and time.time() - c["ts"] < 600:
+        return c["fid"]
+    if not bot or not os.path.exists(_BASE_PATH):
+        return c["fid"] if c else None
+    async with _ub_lock:
+        c = _ub.get(uid)
+        if c and not fresh and time.time() - c["ts"] < 600:
+            return c["fid"]
+        try:
+            data = await asyncio.wait_for(_profile_photo_bytes(uid), 8)
+            key = hashlib.sha1(data).hexdigest() if data else "none"
+            if c and c["key"] == key:
+                c["ts"] = time.time()
+                return c["fid"]
+            buf = await asyncio.to_thread(_circle_banner, data)
+            target = min(ADMIN_IDS) if ADMIN_IDS else uid
+            m = await bot.send_photo(chat_id=target, photo=buf.getvalue(), disable_notification=True)
+            fid = m.photo[-1].file_id
+            try:
+                await m.delete()
+            except Exception:  # noqa: BLE001
+                pass
+            _ub[uid] = {"key": key, "fid": fid, "ts": time.time()}
+            return fid
+        except Exception as e:  # noqa: BLE001
+            logger.warning("user banner %s: %s", uid, e)
+            return c["fid"] if c else None
+
+
+def _blue(kb):
+    """همهٔ دکمه‌های پنل: آبی (primary) و بدون ایموجی."""
+    if kb is None or not getattr(kb, "inline_keyboard", None):
+        return kb
+    rows = []
+    for row in kb.inline_keyboard:
+        nr = []
+        for b in row:
+            kw = {k: v for k, v in (b.api_kwargs or {}).items() if k != "style"}
+            kw["style"] = "primary"
+            extra = {}
+            if b.callback_data is not None:
+                extra["callback_data"] = b.callback_data
+            if getattr(b, "url", None):
+                extra["url"] = b.url
+            if getattr(b, "switch_inline_query", None) is not None:
+                extra["switch_inline_query"] = b.switch_inline_query
+            nr.append(_IKB(_clean(b.text), api_kwargs=kw, **extra))
+        rows.append(nr)
+    return KB(rows)
+
+
+def _cover_kb(uid):
+    """صفحهٔ اول پنل: فقط یک دکمه."""
+    return KB([[B("دستورات سلف", callback_data="self:cmds", style="primary")]])
+
+
 def _inl_caption(name, uid=None):
     try:
         from zoneinfo import ZoneInfo
@@ -2630,13 +2741,14 @@ async def on_inline_query(update, context):
         await iq.answer([_premium_hint()] if not q.strip() else [], cache_time=0, is_personal=True)
         return
     cap = _inl_caption(iq.from_user.first_name or "", uid)
-    kb = _lock_kb(_inl_kb(uid), uid)
+    kb = _lock_kb(_blue(_cover_kb(uid)), uid)
     rid = f"panel{int(time.time())}"
     url = os.environ.get("SELF_BANNER_URL", "").strip()
-    if url:
+    fid = await user_banner(uid) or _banner["file_id"]
+    if fid:
+        res = InlineQueryResultCachedPhoto(id=rid, photo_file_id=fid, caption=cap, reply_markup=kb)
+    elif url:
         res = InlineQueryResultPhoto(id=rid, photo_url=url, thumbnail_url=url, caption=cap, reply_markup=kb)
-    elif _banner["file_id"]:
-        res = InlineQueryResultCachedPhoto(id=rid, photo_file_id=_banner["file_id"], caption=cap, reply_markup=kb)
     else:
         res = InlineQueryResultArticle(id=rid, title="Panel", input_message_content=InputTextMessageContent(cap), reply_markup=kb)
     await iq.answer([res] + ([_premium_hint()] if not q.strip() else []), cache_time=0, is_personal=True)
@@ -2682,7 +2794,7 @@ async def _owner_gate(q):
 
 
 async def _inl_edit(bot, imid, text, kb, parse_mode=None):
-    kb = _lock_kb(kb, _inl_owner.get(imid))
+    kb = _lock_kb(_blue(kb), _inl_owner.get(imid))
     try:
         await bot.edit_message_caption(inline_message_id=imid, caption=text[:1024], reply_markup=kb, parse_mode=parse_mode)
         return
@@ -2805,6 +2917,7 @@ async def send_inline_panel(uid, ev):
     if not client or not uname:
         return False
     try:
+        await user_banner(uid, fresh=True)     # بنر شخصی از قبل آماده بشه تا پنل سریع بیاد
         res = await client.inline_query(uname, "panel", entity=ev.chat_id)
         if not res:
             return False
