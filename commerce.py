@@ -17,9 +17,10 @@ SUPPORT = '@escotch'
 CARD = '6219 8618 5116 0068'
 OWNER = 'ظریفی'
 ACTIVATE_COST = 5
-# دورهٔ رایگان ۷ روزه: کاربری که ربات رو استارت کنه و عضو کانال‌ها بشه، ۷ روز بدون کسر الماس از سلف استفاده می‌کنه.
+# هدیهٔ شروع: کاربری که ربات رو استارت کنه و عضو کانال‌ها بشه، یک‌بار ۲۵۰ الماس (۵ روز سلف) می‌گیره.
 # پیش‌فرض روشنه؛ برای خاموش‌کردنش توی Railway بذار SELF_TRIAL=0
-TRIAL_DAYS = 7
+TRIAL_DAYS = 7          # (قدیمی) فقط برای کاربرانی که قبلاً دورهٔ زمانی گرفتن
+TRIAL_BONUS = 250       # هدیهٔ شروع: ۲۵۰ الماس یک‌بار برای هر کاربر (معادل ۵ روز)
 TRIAL_ENABLED = os.environ.get('SELF_TRIAL', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 _EMOJI_RE = __import__('re').compile("[\U0001F000-\U0001FFFF\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\uFE0F\u200d]")
@@ -38,6 +39,7 @@ class Wallet(Base):
     self_started = Column(Boolean, default=False)
     trial_until = Column(Integer, nullable=True)
     trial_used = Column(Boolean, default=False)
+    spent = Column(Numeric(12, 1), default=Decimal('0.0'))
 class Payment(Base):
     __tablename__ = 'diamond_payments'
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -101,6 +103,8 @@ def _migrate_wallet():
                 conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN trial_until INTEGER'))
             if 'trial_used' not in cols:
                 conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN trial_used BOOLEAN DEFAULT FALSE'))
+            if 'spent' not in cols:
+                conn.execute(text('ALTER TABLE diamond_wallets ADD COLUMN spent NUMERIC(12,1) DEFAULT 0'))
         if 'diamond_payments' in insp.get_table_names():
             pcols = {c['name'] for c in insp.get_columns('diamond_payments')}
             with __import__('database').engine.begin() as conn:
@@ -115,7 +119,7 @@ def _migrate_wallet():
         import logging; logging.getLogger(__name__).exception('wallet migration failed')
 
 def start_trial(uid):
-    """Start the 7-day trial once, only after required-channel membership is verified."""
+    """هدیهٔ شروع (۲۵۰ الماس) فقط یک‌بار و فقط بعد از تأیید عضویت کانال‌ها. خروجی: (None, آیا همین الان داده شد)"""
     now = int(time.time())
     s = get_session()
     try:
@@ -125,11 +129,20 @@ def start_trial(uid):
             s.add(w)
         if not w.trial_used:
             w.trial_used = True
-            w.trial_until = now + TRIAL_DAYS * 24 * 60 * 60
+            w.balance = Decimal(w.balance or 0) + Decimal(TRIAL_BONUS)
             s.commit()
             selfbot.save_row(uid, enabled=True)
-            return w.trial_until, True
-        return w.trial_until, False
+            return None, True
+        return None, False
+    finally:
+        s.close()
+
+def add_spent(uid, amount):
+    s = get_session()
+    try:
+        w = s.get(Wallet, uid)
+        if w:
+            w.spent = Decimal(w.spent or 0) + Decimal(str(amount)); s.commit()
     finally:
         s.close()
 
@@ -141,7 +154,7 @@ def wallet(uid, ref=None):
             w=Wallet(user_id=uid,balance=Decimal('0.0'),last_charge=int(time.time()))
             if ref and ref != uid and s.get(Wallet,ref): w.referrer=ref
             s.add(w); s.commit()
-        return {'balance': Decimal(w.balance or 0), 'referrer':w.referrer,'self_started':bool(w.self_started),'last_charge':w.last_charge or int(time.time()), 'trial_until':getattr(w,'trial_until',None), 'trial_used':bool(getattr(w,'trial_used',False))}
+        return {'balance': Decimal(w.balance or 0), 'referrer':w.referrer,'self_started':bool(w.self_started),'last_charge':w.last_charge or int(time.time()), 'trial_until':getattr(w,'trial_until',None), 'trial_used':bool(getattr(w,'trial_used',False)), 'spent': Decimal(getattr(w,'spent',0) or 0)}
     finally:s.close()
 def change(uid, amount):
     s=get_session()
@@ -180,7 +193,7 @@ def home_kb():
         [btn('کد هدیه', 'shop:code', style='success')],
         [btn('آموزش استفاده', 'shop:help'), btn('درباره سلف', 'shop:about')],
         [btn('تیکت پشتیبانی', 'shop:ticket', style='success')],
-        [btn('حساب کاربری', 'shop:dash')],
+        [btn('داشبورد', 'shop:board', style='success'), btn('حساب کاربری', 'shop:dash')],
     ])
 def join_kb():
     rows=[[B('عضویت در '+ch, url=url)] for ch,url in CHANNELS]
@@ -421,6 +434,7 @@ def welcome_text(name, balance):
         '🎛 همه‌چیز از یه پنل شیک؛ کافیه توی هر چتی بنویسی «.پنل»',
         '',
         f'💎 سلف با الماس کار می‌کنه: فعال‌سازی {ACTIVATE_COST} الماس، بعدش ساعتی ۲ الماس (روشن) یا ۰٫۲ الماس (خاموش).',
+        f'🎁 هدیهٔ شروع: {TRIAL_BONUS} الماس (یک‌بار، بعد از عضویت کانال‌ها).',
         '🔒 بدون الماس سلف فعال نمی‌شه.',
         '',
         f'💰 موجودی تو: {fmt_bal(balance)} الماس',
@@ -454,8 +468,27 @@ async def start(update,context):
                 await context.bot.send_message(wref, f'{u.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
         except Exception:
             pass
-    trial_msg = '\n🎁 دورهٔ رایگان سلفت به مدت ۷ روز شروع شد؛ توی این مدت الماسی کسر نمی‌شه.' if trial_new else ''
+    trial_msg = f'\n🎁 {TRIAL_BONUS} الماس هدیهٔ شروع گرفتی (معادل ۵ روز سلف)!' if trial_new else ''
     await update.effective_message.reply_text(welcome_text(u.first_name or '', wallet(u.id)['balance']) + trial_msg, reply_markup=home_kb())
+def _span(hours):
+    h = int(hours)
+    d, h = divmod(h, 24)
+    return (f'{d} روز و ' if d else '') + f'{h} ساعت'
+
+def board_text(uid):
+    w = wallet(uid)
+    bal = Decimal(w['balance'])
+    rate = Decimal('2.0') if w['self_started'] else Decimal('0.2')
+    left = _span(bal / rate)
+    return ('📊 داشبورد\n\n'
+            f'🆔 آیدی عددی: <code>{uid}</code>\n'
+            f'💎 الماس فعلی: {fmt_bal(bal)}\n'
+            f'📉 تا الان مصرف شده: {fmt_bal(w["spent"])} الماس\n'
+            f'⏳ باقی‌مانده: {fmt_bal(bal)} الماس ≈ {left} ({"سلف روشن، ساعتی ۲ الماس" if w["self_started"] else "سلف خاموش، ساعتی ۰٫۲ الماس"})\n'
+            f'🔌 وضعیت سلف: {"روشن ✅" if w["self_started"] else "خاموش ⏹"}\n\n'
+            '👆 آیدی رو لمس کن تا کپی بشه.\n'
+            'ℹ️ «مصرف‌شده» از نسخهٔ جدید به بعد حساب می‌شه.')
+
 async def show_panel(q, text, **kwargs):
     try:
         await q.edit_message_text(text, **kwargs)
@@ -476,7 +509,7 @@ async def callback(update,context):
                     await context.bot.send_message(wref, f'{q.from_user.first_name} با لینک دعوت تو وارد شد؛ هر دو ۵۰ الماس گرفتید.')
             except Exception:
                 pass
-        note = '\n🎁 دورهٔ رایگان ۷ روزه شروع شد؛ توی این مدت الماسی کسر نمی‌شه.' if trial_new else ''
+        note = f'\n🎁 {TRIAL_BONUS} الماس هدیهٔ شروع گرفتی (معادل ۵ روز سلف)!' if trial_new else ''
         await show_panel(q, '✅ عضویتت تأیید شد!\n\n' + welcome_text(q.from_user.first_name or '', wallet(uid)['balance']) + note,reply_markup=home_kb()); return
     if not await is_member(context.bot,uid):
         await show_panel(q, 'برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
@@ -491,7 +524,7 @@ async def callback(update,context):
         if w['balance'] < ACTIVATE_COST and not trial_active:
             await show_panel(q, f'❌ الماس کافی نداری.\n\n💎 موجودی تو: {fmt_bal(w["balance"])} الماس\n🔒 برای فعال‌سازی سلف حداقل {ACTIVATE_COST} الماس لازمه.\nاز «خرید الماس» شارژ کن یا با دعوت دوستان الماس بگیر.',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('دعوت دوستان',callback_data='shop:invite')],[B('منوی اصلی',callback_data='shop:home')]])); return
         if not trial_active:
-            change(uid,-5)
+            change(uid,-5); add_spent(uid,5)
         s=get_session()
         try:
             x=s.get(Wallet,uid); x.self_started=True; x.last_charge=int(time.time()); s.commit()
@@ -506,6 +539,7 @@ async def callback(update,context):
         selfbot.save_row(uid, enabled=False)
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
         await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
+    elif data=='shop:board': await show_panel(q, board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
@@ -1023,7 +1057,7 @@ async def charge_job(context):
             last=w.last_charge or now; hours=(now-last)//3600
             if hours<=0: continue
             rate=Decimal('2.0') if w.self_started else Decimal('0.2')
-            cost=rate*hours; w.balance=max(Decimal('0.0'),Decimal(w.balance or 0)-cost); w.last_charge=last+hours*3600
+            cost=rate*hours; w.spent=Decimal(w.spent or 0)+min(cost,Decimal(w.balance or 0)); w.balance=max(Decimal('0.0'),Decimal(w.balance or 0)-cost); w.last_charge=last+hours*3600
             if w.self_started and Decimal(w.balance)<=0:
                 w.self_started=False
                 try: selfbot.save_row(w.user_id, enabled=False)
