@@ -307,12 +307,12 @@ def btn(text, data=None, url=None, style="primary"):
 # (متن دکمه، کلید، رنگ؛ None = پیش‌فرض/خاکستری). ترتیب هر ردیف همون ترتیب نمایش روی صفحه‌ست.
 MENU_ROWS = [
     [('فعالسازی سلف', 'activate', 'success')],
-    [('داشبورد', 'board', None), ('حساب کاربری', 'account', None)],
+    [('مدیریت گروه و بازی', 'panel', None), ('حساب کاربری', 'account', None)],
     [('خرید الماس', 'buy', 'primary')],
     [('انتقال الماس', 'transfer', 'primary'), ('الماس رایگان', 'free', None), ('راهنما و پشتیبانی', 'help', 'primary')],
 ]
 MENU_TEXT = {t: k for row in MENU_ROWS for t, k, _ in row}
-MENU_DATA = {'activate': 'shop:create', 'account': 'shop:dash', 'board': 'shop:board', 'buy': 'shop:buy',
+MENU_DATA = {'activate': 'shop:create', 'account': 'shop:dash', 'panel': 'shop:panel', 'buy': 'shop:buy',
              'transfer': 'shop:transfer', 'free': 'shop:free', 'help': 'shop:helpmenu'}
 
 def main_reply_kb():
@@ -661,8 +661,7 @@ class _Shim:
     async def edit_message_caption(self, *a, **k): raise RuntimeError('shim')
     async def edit_message_reply_markup(self, *a, **k): pass
 
-_IMG = {'buy': 'banner_buy.jpg', 'activate': 'banner_activate.jpg', 'account': 'banner_account.jpg',
-       'board': 'banner_account.jpg', 'free': 'banner_account.jpg', 'help': 'banner_account.jpg'}
+_IMG = {'buy': 'banner_buy.jpg', 'activate': 'banner_activate.jpg', 'account': 'banner_account.jpg'}
 _IMG_ID = {}
 _MSG_IMG = {}    # (chat_id, message_id) -> کلید عکسی که الان روی اون پیامه؛ برای اینکه بین منوها عکس درست عوض بشه
 
@@ -742,16 +741,15 @@ async def callback(update,context,_q=None,_data=None):
                f'<blockquote>💎 موجودی: <b>{fmt_bal(bal)}</b> الماس\n'
                f'🔌 وضعیت: <b>{"روشن ✅" if started else "خاموش ⏹"}</b>\n'
                f'⏳ شارژ کافی برای: <b>{left}</b></blockquote>\n'
+               '<blockquote>🤖 پاسخ خودکار  •  🛡 ضدحذف و ویرایش\n🎮 بازی خودکار  •  🕒 ساعت زنده\n🌐 ترجمه  •  🏷 تگ اعضا</blockquote>\n'
                '💰 <b>هزینه‌ها</b>\n'
-               '▫️ فعال‌سازی: <b>۵ الماس</b>\n'
-               '▫️ حالت روشن: ساعتی <b>۲ الماس</b>\n'
-               '▫️ حالت خاموش: ساعتی <b>۰٫۲ الماس</b>\n\n'
+               f'▫️ فعال‌سازی: <b>{ACTIVATE_COST}</b> الماس (یک‌بار)\n'
+               '▫️ حالت روشن: ساعتی <b>۲</b> الماس\n'
+               '▫️ حالت خاموش: ساعتی <b>۰٫۲</b> الماس\n\n'
                + ('⚠️ <b>الماس کافی نداری.</b> از «خرید الماس» یا «الماس رایگان» شارژ کن.' if low
-                  else 'برای شروع، وارد اکانت خودت شو.'))
-        await show_photo(q, context, 'activate', cap, KB([[B('ورود به اکانت',callback_data='self:conn',style='success')],
-                         [B('روشن کردن',callback_data='shop:on'),B('خاموش کردن',callback_data='shop:off')],
-                         [B('خرید الماس',callback_data='shop:buy'),B('حساب کاربری',callback_data='shop:dash')],
-                         [B('منوی اصلی',callback_data='shop:home')]]), parse_mode='HTML')
+                  else '✅ آماده‌ای! «روشن کردن» رو بزن و اکانتت رو وصل کن.'))
+        await show_photo(q, context, 'activate', cap, KB([[B('روشن کردن',callback_data='shop:on')],[B('خاموش کردن',callback_data='shop:off')],
+                         [B('خرید الماس',callback_data='shop:buy'),B('حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]), parse_mode='HTML')
     elif data=='shop:panel':
         try:
             if not selfbot._allowed(uid):
@@ -761,12 +759,12 @@ async def callback(update,context,_q=None,_data=None):
         except Exception:
             pass
     elif data=='shop:helpmenu':
-        await show_photo(q, context, 'help', '🆘 راهنما و پشتیبانی\n\nآموزش استفاده، توضیح سلف یا ارتباط با پشتیبانی رو از دکمه‌های زیر انتخاب کن.',
+        await show_panel(q, '🆘 راهنما و پشتیبانی\n\nآموزش استفاده، توضیح سلف یا ارتباط با پشتیبانی رو از دکمه‌های زیر انتخاب کن.',
                          reply_markup=KB([[B('آموزش استفاده',callback_data='shop:help'),B('درباره سلف',callback_data='shop:about')],
                                           [B('تیکت پشتیبانی',callback_data='shop:ticket',style='success')],
                                           [B('پشتیبان',url='https://t.me/'+SUPPORT.lstrip('@'))],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:free':
-        await show_photo(q, context, 'free', '🎁 الماس رایگان\n\n'
+        await show_panel(q, '🎁 الماس رایگان\n\n'
                          '👥 دعوت دوستان: با هر دعوت، ۵۰ الماس برای تو و ۵۰ الماس برای دوستت\n'
                          '🎟 کد هدیه: اگه کد هدیه داری واردش کن\n'
                          f'🎉 هدیهٔ شروع: {TRIAL_BONUS} الماس برای هر کاربر (بعد از عضویت کانال‌ها)',
@@ -793,20 +791,8 @@ async def callback(update,context,_q=None,_data=None):
         selfbot.save_row(uid, enabled=False)
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
         await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
-    elif data=='shop:board':
-        await show_photo(q, context, 'board', board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy',style='success')],[B('حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
-    elif data=='shop:dash':
-        sr = selfbot.get_row(uid)
-        phone = (getattr(sr, 'phone', None) or 'ثبت نشده') if sr else 'ثبت نشده'
-        bal = Decimal(w['balance'])
-        toman = int(bal * Decimal(unit_price()))
-        cap = (f'👤 <b>حساب کاربری</b>\n\n🆔 آیدی عددی: <code>{uid}</code>\n'
-               f'📱 شماره تلفن: <code>{phone}</code>\n💎 موجودی الماس: <b>{fmt_bal(bal)}</b>\n'
-               f'💰 معادل تومانی موجودی الماس: <b>{toman:,}</b> تومان\n'
-               f'🔌 وضعیت سلف: <b>{"روشن ✅" if w["self_started"] else "خاموش ⏹"}</b>')
-        await show_photo(q, context, 'account', cap, KB([[B('داشبورد',callback_data='shop:board',style='success')],
-                         [B('انتقال الماس',callback_data='shop:transfer'),B('خرید الماس',callback_data='shop:buy')],
-                         [B('منوی اصلی',callback_data='shop:home')]]), parse_mode='HTML')
+    elif data=='shop:board': await show_panel(q, board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:dash': await show_photo(q, context, 'account', f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',KB([[B('داشبورد',callback_data='shop:board',style='success')],[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
     elif data=='shop:buy':
