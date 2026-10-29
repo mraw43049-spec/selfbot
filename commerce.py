@@ -90,6 +90,124 @@ class GiftRedeem(Base):
     user_id = Column(BigInteger, primary_key=True)
     ts = Column(Integer, default=lambda: int(time.time()))
 
+class Setting(Base):
+    __tablename__ = 'bot_settings'
+    key = Column(String(40), primary_key=True)
+    val = Column(String(200), nullable=True)
+class StaffMember(Base):
+    __tablename__ = 'support_staff'
+    user_id = Column(BigInteger, primary_key=True)
+    perms = Column(String(300), nullable=False, default='')
+    added_by = Column(BigInteger, nullable=True)
+    created = Column(Integer, default=lambda: int(time.time()))
+
+def get_setting(key, default=None):
+    s = get_session()
+    try:
+        r = s.get(Setting, key)
+        return r.val if r and r.val is not None else default
+    finally:
+        s.close()
+
+def set_setting(key, val):
+    s = get_session()
+    try:
+        r = s.get(Setting, key)
+        if not r:
+            r = Setting(key=key); s.add(r)
+        r.val = str(val); s.commit()
+    finally:
+        s.close()
+
+# ---------- دسترسی‌های پشتیبانی ----------
+# ادمین‌ها (ADMIN_IDS) همیشه همهٔ دسترسی‌ها رو دارن. پشتیبان‌های قدیمی (SUPPORT_IDS) دسترسی پایه دارن
+# و بقیه رو هر کس که دسترسی «مدیریت پشتیبان‌ها» داره می‌تونه تنظیم کنه.
+PERMS = (('receipts', 'رسیدها'), ('tickets', 'تیکت‌ها'), ('lookup', 'بررسی کاربر'), ('balance', 'تغییر الماس کاربر'),
+         ('gift', 'کد هدیه'), ('discount', 'کد تخفیف'), ('price', 'قیمت الماس'), ('broadcast', 'پیام همگانی'),
+         ('memehelp', 'دستورات میم'), ('staff', 'مدیریت پشتیبان‌ها'))
+PERM_KEYS = [k for k, _ in PERMS]
+BASIC_PERMS = {'receipts', 'tickets', 'lookup', 'memehelp', 'broadcast'}
+NEW_STAFF_PERMS = {'receipts', 'tickets'}
+
+def _staff_row(uid):
+    s = get_session()
+    try:
+        r = s.get(StaffMember, uid)
+        return None if r is None else {x for x in (r.perms or '').split(',') if x in PERM_KEYS}
+    finally:
+        s.close()
+
+def perms_of(uid):
+    if uid in selfbot.ADMIN_IDS:
+        return set(PERM_KEYS)
+    row = _staff_row(uid)
+    if row is not None:
+        return row
+    if uid in selfbot.SUPPORT_IDS:
+        return set(BASIC_PERMS)
+    return set()
+
+def has_perm(uid, perm):
+    return perm in perms_of(uid)
+
+def staff_ids(perm):
+    ids = set(selfbot.ADMIN_IDS)
+    s = get_session()
+    try:
+        db = {r.user_id: {x for x in (r.perms or '').split(',')} for r in s.query(StaffMember).all()}
+    finally:
+        s.close()
+    for u in set(selfbot.SUPPORT_IDS) | set(db):
+        if perm in db.get(u, BASIC_PERMS):
+            ids.add(u)
+    return ids
+
+def save_perms(uid, perms, by=None):
+    s = get_session()
+    try:
+        r = s.get(StaffMember, uid)
+        if not r:
+            r = StaffMember(user_id=uid, added_by=by); s.add(r)
+        r.perms = ','.join(k for k in PERM_KEYS if k in perms); s.commit()
+    finally:
+        s.close()
+
+def all_staff():
+    s = get_session()
+    try:
+        db = {r.user_id: {x for x in (r.perms or '').split(',') if x in PERM_KEYS} for r in s.query(StaffMember).all()}
+    finally:
+        s.close()
+    out = dict(db)
+    for u in selfbot.SUPPORT_IDS:
+        out.setdefault(u, set(BASIC_PERMS))
+    for u in selfbot.ADMIN_IDS:
+        out.pop(u, None)
+    return out
+
+async def _notify_admins(context, text, exclude=None):
+    for a in set(selfbot.ADMIN_IDS):
+        if a == exclude:
+            continue
+        try:
+            await context.bot.send_message(a, text)
+        except Exception:
+            pass
+
+def adjust_balance(uid, delta):
+    """(قبلی، جدید)؛ موجودی هیچ‌وقت منفی نمی‌شه."""
+    s = get_session()
+    try:
+        w = s.get(Wallet, uid)
+        if not w:
+            w = Wallet(user_id=uid, balance=Decimal('0.0'), last_charge=int(time.time())); s.add(w)
+        old = Decimal(w.balance or 0)
+        new = max(Decimal('0.0'), old + Decimal(str(delta)))
+        w.balance = new; s.commit()
+        return old, new
+    finally:
+        s.close()
+
 def _migrate_wallet():
     # create_all does not add columns to existing SQLite/Postgres tables.
     try:
@@ -206,8 +324,33 @@ async def is_member(bot,uid):
         except Exception:
             return False
     return True
-PRICES = {'1': 75000, '2': 120000}
+PRICES = {'1': 75000, '2': 120000}      # (قدیمی) فقط برای رسیدهای قبلی
 DIAMONDS = {'1': 1000, '2': 1800}
+MIN_QTY, MAX_QTY, QTY_STEP, DEFAULT_QTY = 500, 100000, 500, 1000
+DEFAULT_UNIT = 75        # تومان برای هر الماس؛ پشتیبانی از پنلش عوضش می‌کنه
+
+def unit_price():
+    try:
+        v = int(get_setting('unit_price', DEFAULT_UNIT))
+        return v if v > 0 else DEFAULT_UNIT
+    except Exception:
+        return DEFAULT_UNIT
+
+def plan_info(plan):
+    """(تعداد الماس، قیمت پایه به تومان). پلن جدید: c<تعداد>x<قیمت هر الماس>."""
+    if plan in PRICES:
+        return DIAMONDS[plan], PRICES[plan]
+    m = re.fullmatch(r'c(\d+)x(\d+)', plan or '')
+    if m:
+        n, u = int(m.group(1)), int(m.group(2))
+        return n, n * u
+    return 0, 0
+
+def _qty(context):
+    try:
+        return min(MAX_QTY, max(MIN_QTY, int(context.user_data.get('buy_n', DEFAULT_QTY))))
+    except Exception:
+        return DEFAULT_QTY
 _warn_level = {}   # uid -> سطح هشدار کمبود الماس (۱: کمتر از ۲۴ ساعت، ۲: کمتر از ۳ ساعت)
 
 def money(n):
@@ -217,18 +360,29 @@ def _pct(context):
     d = context.user_data.get('disc')
     return int(d['pct']) if d else 0
 
-def buy_text(pct=0):
-    def line(plan, label):
-        base = PRICES[plan]
-        if pct:
-            return f'{label} — {DIAMONDS[plan]} الماس — {money(base)} ← {money(base * (100 - pct) // 100)} تومان ({pct}٪ تخفیف 🏷)'
-        return f'{label} — {DIAMONDS[plan]} الماس — {money(base)} تومان'
-    return ('💎 خرید الماس\n\n' + line('1', '۱ ماه') + '\n' + line('2', '۲ ماه') + '\n\n'
-            + (f'🏷 کد تخفیف فعاله: {pct}٪\n\n' if pct else 'کد تخفیف داری؟ دکمهٔ «کد تخفیف» رو بزن.\n\n')
-            + f'شماره کارت: {CARD}\nبه نام: {OWNER}\nبعد از واریز، رسید رو همین‌جا ارسال کن؛ رسید و توضیحات برای پشتیبانی فرستاده می‌شه.')
+def buy_text(pct=0, n=DEFAULT_QTY):
+    u = unit_price(); base = n * u
+    price = (f'{money(base)} ← {money(base * (100 - pct) // 100)} تومان ({pct}٪ تخفیف 🏷)' if pct else f'{money(base)} تومان')
+    return ('💎 خرید الماس\n\n'
+            f'💎 تعداد: {n} الماس\n💰 مبلغ: {price}\n(قیمت هر الماس: {money(u)} تومان)\n\n'
+            'با دکمه‌های مثبت و منفی تعداد رو تغییر بده یا مقدار دلخواه رو دستی وارد کن.\n'
+            + (f'🏷 کد تخفیف فعاله: {pct}٪\n' if pct else '')
+            + f'\nشماره کارت: {CARD}\nبه نام: {OWNER}\nبعد از تأیید تعداد، مبلغ رو واریز کن و رسید رو همین‌جا بفرست.')
 
-def buy_kb():
-    return KB([[B('خرید ۱ ماهه',callback_data='shop:pay:1')],[B('خرید ۲ ماهه',callback_data='shop:pay:2')],[B('کد تخفیف',callback_data='shop:disc')],[B('منوی اصلی',callback_data='shop:home')]])
+def buy_kb(n=DEFAULT_QTY):
+    return KB([[btn(f'{n} الماس', 'shop:q:noop')],
+               [btn(f'− {QTY_STEP}', 'shop:q:sub', style='danger'), btn(f'+ {QTY_STEP}', 'shop:q:add', style='success')],
+               [btn('تنظیم دستی تعداد الماس', 'shop:q:manual')],
+               [btn('کد تخفیف', 'shop:disc')],
+               [btn('تأیید تعداد و ادامه خرید', 'shop:q:ok', style='success')],
+               [btn('بازگشت', 'shop:home', style='danger')]])
+
+async def _show_pay(q, context, plan):
+    context.user_data['payment_plan'] = plan
+    dia, base = plan_info(plan)
+    pct = _pct(context); final = base * (100 - pct) // 100
+    await show_panel(q, f'💳 خرید {dia} الماس\n💰 مبلغ قابل پرداخت: {money(final)} تومان' + (f' (با {pct}٪ تخفیف)' if pct else '')
+                     + f'\nشماره کارت: {CARD}\nبه نام: {OWNER}\n\nحالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
 
 def make_discount(percent, max_uses, hours=None):
     s = get_session()
@@ -307,8 +461,8 @@ def stats_text():
         pays = s.query(Payment).all()
         ok = [p for p in pays if p.status == 'approved']
         pend = len([p for p in pays if p.status == 'pending'])
-        rev = sum(PRICES.get(p.plan, 0) * (100 - int(p.discount or 0)) // 100 for p in ok)
-        sold = sum(DIAMONDS.get(p.plan, 0) for p in ok)
+        rev = sum(plan_info(p.plan)[1] * (100 - int(p.discount or 0)) // 100 for p in ok)
+        sold = sum(plan_info(p.plan)[0] for p in ok)
         enabled = s.query(selfbot.SelfAccess).filter(selfbot.SelfAccess.enabled.is_(True)).count()
         gifts = s.query(GiftRedeem).count()
         disc_used = s.query(DiscountUse).count()
@@ -543,13 +697,24 @@ async def callback(update,context):
     elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
-    elif data=='shop:buy': await show_panel(q, buy_text(_pct(context)), reply_markup=buy_kb())
+    elif data=='shop:buy':
+        n=_qty(context); await show_panel(q, buy_text(_pct(context), n), reply_markup=buy_kb(n))
+    elif data.startswith('shop:q:'):
+        act=data.split(':')[2]; n=_qty(context); old_n=n
+        if act=='noop': return
+        if act=='manual':
+            context.user_data['gift_step']='qty'
+            await show_panel(q, f'✏️ تعداد الماس دلخواهت رو بفرست (بین {MIN_QTY} تا {MAX_QTY}). برای لغو بنویس «لغو».'); return
+        if act=='ok':
+            await _show_pay(q, context, f'c{n}x{unit_price()}'); return
+        n = min(MAX_QTY, n + QTY_STEP) if act=='add' else max(MIN_QTY, n - QTY_STEP)
+        if n==old_n: return
+        context.user_data['buy_n']=n
+        await show_panel(q, buy_text(_pct(context), n), reply_markup=buy_kb(n))
     elif data=='shop:disc':
         context.user_data['gift_step']='disc'; await show_panel(q, '🏷 کد تخفیفت رو بفرست (مثل OFF-XXXXXX). برای لغو بنویس «لغو».')
     elif data.startswith('shop:pay:'):
-        plan=data.rsplit(':',1)[1]; context.user_data['payment_plan']=plan
-        pct=_pct(context); final=PRICES.get(plan,0)*(100-pct)//100
-        await show_panel(q, f'💳 مبلغ قابل پرداخت: {money(final)} تومان'+(f' (با {pct}٪ تخفیف)' if pct else '')+f'\nشماره کارت: {CARD}\nبه نام: {OWNER}\n\nحالا عکس یا فایل رسید پرداخت رو ارسال کن. برای لغو بنویس «لغو».')
+        await _show_pay(q, context, data.rsplit(':',1)[1])
     elif data=='shop:invite':
         me=await context.bot.get_me(); link=f'https://t.me/{me.username}?start=ref{uid}'
         await show_panel(q, f'🔗 لینک اختصاصی دعوتت:\n{link}\nهر کاربر جدیدی که با لینک تو وارد بشه و عضویت کانال‌هاش تأیید بشه، ۵۰ الماس می‌گیره و برای تو هم ۵۰ الماس ثبت می‌شه.',reply_markup=KB([[B('منوی اصلی',callback_data='shop:home')]]))
@@ -563,9 +728,10 @@ async def callback(update,context):
 _pay_msgs = {}   # pid -> [(chat_id, message_id)] پیام‌های رسید پیش پشتیبان‌ها
 
 def pay_caption(pid, uid, username, plan, pct, code, claimed_name=None):
-    final = PRICES.get(plan, 0) * (100 - int(pct or 0)) // 100
+    dia, base = plan_info(plan)
+    final = base * (100 - int(pct or 0)) // 100
     t = (f'رسید خرید الماس\nکاربر: {uid} (@{username or "ندارد"})\n'
-         f'پلن: {"۱ ماهه / ۱۰۰۰ الماس" if plan == "1" else "۲ ماهه / ۱۸۰۰ الماس"}\n'
+         f'تعداد: {dia} الماس\n'
          f'💳 مبلغ باید پرداخت‌شده باشد: {money(final)} تومان' + (f' (با کد {code} — {pct}٪ تخفیف)' if pct else '') +
          f'\nشناسه پیگیری: {pid}')
     if claimed_name:
@@ -609,7 +775,7 @@ async def _pay_refresh(bot, pid, claimer, claimer_name, done=False):
 async def payment_review(update, context):
     q = update.callback_query
     uid = q.from_user.id
-    if not is_staff(uid):
+    if not has_perm(uid, 'receipts'):
         await q.answer("دسترسی ندارید", show_alert=True)
         return
     parts = (q.data or "").split(":")
@@ -655,7 +821,9 @@ async def payment_review(update, context):
             return
         await q.answer()
         if action == "approve":
-            amount = Decimal("1000") if p.plan == "1" else Decimal("1800")
+            amount = Decimal(plan_info(p.plan)[0])
+            if amount <= 0:
+                await q.message.reply_text("پلن این رسید شناخته‌شده نیست؛ دستی بررسی کن."); return
             w = s.get(Wallet, p.user_id)
             if not w:
                 w = Wallet(user_id=p.user_id, balance=Decimal("0"), last_charge=int(time.time()))
@@ -703,7 +871,7 @@ async def ticket_submit(m, context, u):
         s.close()
     ud.pop('tk_step', None); ud.pop('tk_id', None)
     head = (f'🎫 تیکت #{tid} | ' + ('جدید' if new else 'پیام جدید') + f'\nکاربر: {u.id} (@{u.username or "ندارد"}) {u.first_name or ""}')
-    for staff in set(selfbot.ADMIN_IDS) | set(selfbot.SUPPORT_IDS):
+    for staff in staff_ids('tickets'):
         try:
             hm = await context.bot.send_message(staff, head, reply_markup=_tk_kb(tid))
             await context.bot.copy_message(staff, m.chat_id, m.message_id, reply_to_message_id=hm.message_id)
@@ -751,38 +919,103 @@ async def tk_cb(update, context):
     await q.message.reply_text(f'✍️ پیامت برای تیکت #{tid} رو بفرست (متن، عکس، ویس، ویدیو یا فایل). برای لغو بنویس «لغو».')
 
 def is_staff(uid):
-    return uid in selfbot.ADMIN_IDS or uid in selfbot.SUPPORT_IDS
+    return bool(perms_of(uid))
 
-def sup_kb():
-    return KB([[B('📥 رسیدهای در انتظار',callback_data='sup:pending')],
-               [B('🎫 تیکت‌های باز',callback_data='sup:tickets')],
-               [B('🔎 بررسی کاربر',callback_data='sup:lookup')],
-               [B('😂 دستورات میم',callback_data='sup:memehelp')],
-               [B('📢 پیام همگانی',callback_data='adm:bc')],
-               [B('✖️ بستن',callback_data='sup:close')]])
-
-def lookup_kb(uid):
+def sup_kb(uid=None):
+    p = perms_of(uid) if uid is not None else set(PERM_KEYS)
     rows = []
-    for kind, f in selfbot.FEATS.items():
-        on = selfbot.feat_get(uid, kind)['allowed']
-        lb = f['label']
-        rows.append([B(f'🛠 غیرفعال‌کردن «{lb}» برای کاربر' if on else f'🛠 فعال‌کردن «{lb}» برای کاربر',
-                       callback_data=f"sup:feat:{kind}:{'off' if on else 'on'}:{uid}")])
-    return KB(rows + [list(r) for r in sup_kb().inline_keyboard])
+    if 'receipts' in p: rows.append([B('رسیدهای در انتظار', callback_data='sup:pending')])
+    if 'tickets' in p: rows.append([B('تیکت‌های باز', callback_data='sup:tickets')])
+    if 'lookup' in p: rows.append([B('بررسی کاربر', callback_data='sup:lookup')])
+    if 'balance' in p: rows.append([B('تغییر الماس کاربر', callback_data='sup:balask')])
+    if 'gift' in p: rows.append([B('ساخت کد هدیه', callback_data='sup:gnew'), B('کدهای هدیه', callback_data='sup:glist')])
+    if 'discount' in p: rows.append([B('ساخت کد تخفیف', callback_data='sup:dnew'), B('کدهای تخفیف', callback_data='sup:dlist')])
+    if 'price' in p: rows.append([B('قیمت الماس', callback_data='sup:price')])
+    if 'staff' in p: rows.append([B('مدیریت پشتیبان‌ها', callback_data='sup:staff')])
+    if 'memehelp' in p: rows.append([B('دستورات میم', callback_data='sup:memehelp')])
+    if 'broadcast' in p: rows.append([B('پیام همگانی', callback_data='adm:bc')])
+    rows.append([B('بستن', callback_data='sup:close')])
+    return KB(rows)
+
+def lookup_kb(target, viewer=None):
+    rows = []
+    if viewer is None or has_perm(viewer, 'balance'):
+        rows.append([B('افزودن الماس', callback_data=f'sup:bal:add:{target}', style='success'),
+                     B('کم کردن الماس', callback_data=f'sup:bal:sub:{target}', style='danger')])
+    if viewer is None or has_perm(viewer, 'lookup'):
+        for kind, f in selfbot.FEATS.items():
+            on = selfbot.feat_get(target, kind)['allowed']
+            lb = f['label']
+            rows.append([B(f'غیرفعال‌کردن «{lb}» برای کاربر' if on else f'فعال‌کردن «{lb}» برای کاربر',
+                           callback_data=f"sup:feat:{kind}:{'off' if on else 'on'}:{target}")])
+    return KB(rows + [list(r) for r in sup_kb(viewer).inline_keyboard])
+
+PANEL_TEXT = ('🛟 پنل پشتیبانی\n\nدکمه‌های زیر بر اساس دسترسی‌هایی که داری نشون داده می‌شن:\n'
+              '📥 رسیدها • 🎫 تیکت‌ها • 🔎 بررسی کاربر • 💎 تغییر الماس کاربر\n'
+              '🎁 کد هدیه • 🏷 کد تخفیف • 💰 قیمت الماس • 👥 مدیریت پشتیبان‌ها\n'
+              '😂 دستورات میم • 📢 پیام همگانی')
 
 async def support_panel(update, context):
     u = update.effective_user
     if not u or not is_staff(u.id) or update.effective_chat.type != 'private':
         return
     context.user_data.pop('sup_step', None)
-    await update.effective_message.reply_text('🛟 پنل پشتیبانی\n\n📥 رسیدها با عکس رسید؛ اول «من بررسی می‌کنم» رو بزن تا کس دیگه‌ای همزمان تأییدش نکنه\n🎫 تیکت‌های کاربران؛ پاسخ با متن، عکس، ویس، ویدیو یا فایل\n🔎 بررسی کاربر با آیدی عددی\n😂 دستورات میم: متنی که کاربر توی دکمهٔ «میم» پنل می‌بینه\n📢 پیام همگانی با هر نوع مدیا', reply_markup=sup_kb())
+    await update.effective_message.reply_text(PANEL_TEXT, reply_markup=sup_kb(u.id))
+
+SUP_NEED = {'pending': 'receipts', 'tickets': 'tickets', 'treply': 'tickets', 'tclose': 'tickets', 'feat': 'lookup', 'lookup': 'lookup',
+            'memehelp': 'memehelp', 'bal': 'balance', 'balask': 'balance', 'gnew': 'gift', 'glist': 'gift', 'dnew': 'discount',
+            'dlist': 'discount', 'price': 'price', 'staff': 'staff', 'sadd': 'staff', 'sedit': 'staff', 'sp': 'staff', 'sdel': 'staff'}
+
+def _perm_kb(target, viewer):
+    cur = perms_of(target); mine = perms_of(viewer)
+    rows = []
+    for k, lb in PERMS:
+        rows.append([B(f'{lb}: ' + ('روشن' if k in cur else 'خاموش'), callback_data=f'sup:sp:{target}:{k}',
+                       style='success' if k in cur else 'danger')])
+    rows.append([B('حذف پشتیبان', callback_data=f'sup:sdel:{target}', style='danger')])
+    rows.append([B('بازگشت', callback_data='sup:staff', style='primary')])
+    return KB(rows)
+
+def _staff_text():
+    st = all_staff()
+    lines = [f'• {u}: ' + (('، '.join(lb for k, lb in PERMS if k in p)) or 'بدون دسترسی') for u, p in st.items()]
+    return '👥 مدیریت پشتیبان‌ها\n\n' + ('\n'.join(lines) if lines else 'هنوز پشتیبانی اضافه نشده.') + \
+        '\n\nبرای تغییر دسترسی روی هر نفر بزن. فقط دسترسی‌هایی رو می‌تونی بدی که خودت داری.'
+
+def _staff_kb():
+    rows = [[B(str(u), callback_data=f'sup:sedit:{u}')] for u in all_staff()]
+    rows.append([B('افزودن پشتیبان', callback_data='sup:sadd', style='success')])
+    rows.append([B('بازگشت', callback_data='sup:home', style='primary')])
+    return KB(rows)
+
+def _gift_list_text():
+    s = get_session()
+    try:
+        rows = s.query(GiftCode).order_by(GiftCode.created.desc()).limit(15).all()
+        lines = [f'{g.code} | 💎 {fmt_bal(g.amount)} | {g.used}/{g.max_uses}' + (' | ⌛' if g.expires and g.expires < int(time.time()) else '') for g in rows]
+    finally:
+        s.close()
+    return '🎟 آخرین کدهای هدیه (کد | الماس | استفاده):\n\n' + ('\n'.join(lines) if lines else 'هنوز کدی ساخته نشده.')
+
+def _disc_list_text():
+    s = get_session()
+    try:
+        rows = s.query(DiscountCode).order_by(DiscountCode.created.desc()).limit(15).all()
+        lines = [f'{d.code} | {d.percent}٪ | {d.used}/{d.max_uses}' + (' | ⌛' if d.expires and d.expires < int(time.time()) else '') for d in rows]
+    finally:
+        s.close()
+    return '🏷 آخرین کدهای تخفیف (کد | درصد | استفاده):\n\n' + ('\n'.join(lines) if lines else 'هنوز کدی ساخته نشده.')
 
 async def sup_cb(update, context):
     q = update.callback_query
     if not is_staff(q.from_user.id):
         await q.answer('این پنل فقط برای پشتیبانیه.', show_alert=True); return
-    await q.answer()
     act = (q.data or '').split(':')[1]
+    need = SUP_NEED.get(act)
+    if need and not has_perm(q.from_user.id, need):
+        await q.answer('این بخش برای تو فعال نیست.', show_alert=True); return
+    await q.answer()
+    uid_ = q.from_user.id
     if act == 'pending':
         s = get_session()
         try:
@@ -848,7 +1081,7 @@ async def sup_cb(update, context):
             return
         selfbot.feat_set_allowed(target, kind, mode == 'on')
         await q.message.reply_text(f"{'✅' if mode == 'on' else '⏹'} «{lb}» برای {target} {'فعال شد.' if mode == 'on' else 'غیرفعال شد.'}",
-                                   reply_markup=lookup_kb(target))
+                                   reply_markup=lookup_kb(target, uid_))
         if mode == 'on':
             try:
                 await context.bot.send_message(target, f'✅ قابلیت «{lb}» برات فعال شد؛ از «تنظیم بازی» ← «{lb}» می‌تونی ببینیش.')
@@ -863,6 +1096,98 @@ async def sup_cb(update, context):
         await q.message.reply_text('😂 متنی که الان کاربر توی دکمهٔ «میم» پنل سلف می‌بینه:\n\n' + selfmodes.meme_help()
                                    + f'\n\n— — —\nمتن جدید رو بفرست (حداکثر {selfmodes.MEME_HELP_MAX} حرف؛ دستورها رو همین‌جا بنویس).\n'
                                    'برگشت به متن پیش‌فرض: «پیش‌فرض» | لغو: «لغو»')
+    elif act == 'home':
+        try:
+            await q.edit_message_text(PANEL_TEXT, reply_markup=sup_kb(uid_))
+        except Exception:
+            await q.message.reply_text(PANEL_TEXT, reply_markup=sup_kb(uid_))
+    elif act == 'balask':
+        context.user_data['sup_step'] = 'lookup'
+        await q.message.reply_text('💎 آیدی عددی کاربر رو بفرست؛ بعدش می‌تونی الماسش رو زیاد یا کم کنی. برای لغو بنویس «لغو».')
+    elif act == 'bal':
+        parts = (q.data or '').split(':')
+        try:
+            op, target = parts[2], int(parts[3])
+            assert op in ('add', 'sub')
+        except Exception:
+            return
+        context.user_data['sup_step'] = f'balamt:{op}:{target}'
+        await q.message.reply_text(f'{"➕ افزودن" if op == "add" else "➖ کم کردن"} الماس برای کاربر {target}\n\nمقدار الماس رو بفرست (مثلاً 100 یا 12.5). برای لغو بنویس «لغو».')
+    elif act == 'gnew':
+        context.user_data['gift_step'] = 'admin_new'
+        await q.message.reply_text('🎁 ساخت کد هدیه\n\nمقدار الماس و تعداد دفعات استفاده رو بفرست:\n100 5  ← ۱۰۰ الماس برای ۵ نفر\n100 5 48  ← با اعتبار ۴۸ ساعته\nبرای لغو بنویس «لغو».')
+    elif act == 'glist':
+        await q.message.reply_text(_gift_list_text())
+    elif act == 'dnew':
+        context.user_data['gift_step'] = 'disc_new'
+        await q.message.reply_text('🏷 ساخت کد تخفیف\n\nدرصد و تعداد دفعات استفاده رو بفرست:\n20 10  ← ۲۰٪ تخفیف برای ۱۰ نفر\n20 10 72  ← با اعتبار ۷۲ ساعته\nبرای لغو بنویس «لغو».')
+    elif act == 'dlist':
+        await q.message.reply_text(_disc_list_text())
+    elif act == 'price':
+        context.user_data['sup_step'] = 'price'
+        await q.message.reply_text(f'💰 قیمت فعلی هر الماس: {money(unit_price())} تومان\n(مثلاً ۱۰۰۰ الماس = {money(unit_price() * 1000)} تومان)\n\nقیمت جدید هر الماس رو به تومان بفرست (فقط عدد). برای لغو بنویس «لغو».')
+    elif act == 'staff':
+        context.user_data.pop('sup_step', None)
+        try:
+            await q.edit_message_text(_staff_text(), reply_markup=_staff_kb())
+        except Exception:
+            await q.message.reply_text(_staff_text(), reply_markup=_staff_kb())
+    elif act == 'sadd':
+        context.user_data['sup_step'] = 'staffid'
+        await q.message.reply_text('👥 آیدی عددی کسی که می‌خوای پشتیبان بشه رو بفرست (باید ربات رو استارت کرده باشه). برای لغو بنویس «لغو».')
+    elif act == 'sedit':
+        try:
+            target = int((q.data or '').split(':')[2])
+        except Exception:
+            return
+        if target in selfbot.ADMIN_IDS:
+            await q.answer('ادمین همهٔ دسترسی‌ها رو داره.', show_alert=True); return
+        try:
+            await q.edit_message_text(f'👤 دسترسی‌های {target}', reply_markup=_perm_kb(target, uid_))
+        except Exception:
+            await q.message.reply_text(f'👤 دسترسی‌های {target}', reply_markup=_perm_kb(target, uid_))
+    elif act == 'sp':
+        parts = (q.data or '').split(':')
+        try:
+            target, key = int(parts[2]), parts[3]
+            assert key in PERM_KEYS
+        except Exception:
+            return
+        if target in selfbot.ADMIN_IDS or target == uid_ and uid_ not in selfbot.ADMIN_IDS:
+            await q.answer('این کاربر رو نمی‌تونی تغییر بدی.', show_alert=True); return
+        if key not in perms_of(uid_):
+            await q.answer('این دسترسی رو خودت نداری، پس نمی‌تونی بدی.', show_alert=True); return
+        cur = perms_of(target)
+        cur ^= {key}
+        save_perms(target, cur, uid_)
+        try:
+            await q.edit_message_reply_markup(reply_markup=_perm_kb(target, uid_))
+        except Exception:
+            pass
+        lb = dict(PERMS)[key]
+        await _notify_admins(context, f'👥 {uid_} دسترسی «{lb}» رو برای {target} {"روشن" if key in cur else "خاموش"} کرد.', exclude=uid_)
+    elif act == 'sdel':
+        try:
+            target = int((q.data or '').split(':')[2])
+        except Exception:
+            return
+        if target in selfbot.ADMIN_IDS or target == uid_:
+            await q.answer('این کاربر رو نمی‌تونی حذف کنی.', show_alert=True); return
+        if target in selfbot.SUPPORT_IDS:
+            save_perms(target, set(), uid_)     # از لیست env حذف نمی‌شه؛ همهٔ دسترسی‌هاش برداشته می‌شه
+        else:
+            s_ = get_session()
+            try:
+                r_ = s_.get(StaffMember, target)
+                if r_:
+                    s_.delete(r_); s_.commit()
+            finally:
+                s_.close()
+        await _notify_admins(context, f'👥 {uid_} پشتیبان {target} رو حذف کرد.', exclude=uid_)
+        try:
+            await q.edit_message_text(_staff_text(), reply_markup=_staff_kb())
+        except Exception:
+            pass
     elif act == 'close':
         try:
             await q.message.delete()
@@ -909,7 +1234,7 @@ async def incoming(update,context):
             selfmodes.set_meme_help(None); await m.reply_text('✅ متن میم به پیش‌فرض برگشت.'); return
         selfmodes.set_meme_help(t)
         await m.reply_text('✅ ذخیره شد. کاربرها از این به بعد این متن رو توی دکمهٔ «میم» می‌بینن:\n\n' + t); return
-    if context.user_data.get('gift_step')=='bc_link' and is_staff(u.id) and m.text:
+    if context.user_data.get('gift_step')=='bc_link' and has_perm(u.id,'broadcast') and m.text:
         t=m.text.strip(); context.user_data.pop('gift_step',None)
         btns=[]
         if t!='لغو':
@@ -928,14 +1253,55 @@ async def incoming(update,context):
         context.user_data.pop('sup_step',None)
         if t=='لغو': await m.reply_text('لغو شد.'); return
         if not t.isdigit(): await m.reply_text('❗️ فقط آیدی عددی بفرست.'); context.user_data['sup_step']='lookup'; return
-        await m.reply_text(user_info_text(int(t)),reply_markup=lookup_kb(int(t))); return
-    if context.user_data.get('gift_step')=='admin_new' and u.id in selfbot.ADMIN_IDS and m.text:
+        await m.reply_text(user_info_text(int(t)),reply_markup=lookup_kb(int(t),u.id)); return
+    if sst.startswith('balamt:') and has_perm(u.id,'balance') and m.text:
+        t=selfbot.fa2en(m.text).strip().replace(',','.')
+        if t=='لغو':
+            context.user_data.pop('sup_step',None); await m.reply_text('لغو شد.'); return
+        try:
+            _,op,tid=sst.split(':'); tid=int(tid); amt=Decimal(t)
+            if amt<=0 or amt>1000000 or amt*10!=(amt*10).to_integral_value(): raise ValueError
+        except Exception:
+            await m.reply_text('❗️ مقدار نامعتبره. یه عدد مثبت بفرست (حداکثر یک رقم اعشار) یا «لغو».'); return
+        context.user_data.pop('sup_step',None)
+        old,new=adjust_balance(tid, amt if op=='add' else -amt)
+        real=abs(new-old)
+        word='اضافه' if op=='add' else 'کم'
+        await m.reply_text(f'✅ {fmt_bal(real)} الماس {word} شد.\n💎 موجودی کاربر {tid}: {fmt_bal(old)} ← {fmt_bal(new)}',reply_markup=lookup_kb(tid,u.id))
+        try: await context.bot.send_message(tid, f'💎 {fmt_bal(real)} الماس توسط پشتیبانی {"به حسابت اضافه" if op=="add" else "از حسابت کم"} شد.\n💰 موجودی فعلی: {fmt_bal(new)} الماس')
+        except Exception: pass
+        await _notify_admins(context, f'💎 {u.id} موجودی کاربر {tid} رو {fmt_bal(old)} ← {fmt_bal(new)} کرد ({"+" if op=="add" else "-"}{fmt_bal(real)}).', exclude=u.id); return
+    if sst=='price' and has_perm(u.id,'price') and m.text:
+        t=selfbot.fa2en(m.text).strip().replace(',','').replace('٬','')
+        if t=='لغو':
+            context.user_data.pop('sup_step',None); await m.reply_text('لغو شد.'); return
+        if not t.isdigit() or not 1<=int(t)<=1000000:
+            await m.reply_text('❗️ فقط یه عدد صحیح به تومان بفرست (یا «لغو»).'); return
+        old=unit_price(); set_setting('unit_price',int(t)); context.user_data.pop('sup_step',None)
+        await m.reply_text(f'✅ قیمت هر الماس شد {money(int(t))} تومان (قبلی: {money(old)}).\n۱۰۰۰ الماس = {money(int(t)*1000)} تومان\nسفارش‌هایی که قبلاً با قیمت قبلی ثبت شدن عوض نمی‌شن.',reply_markup=sup_kb(u.id))
+        await _notify_admins(context, f'💰 {u.id} قیمت هر الماس رو از {money(old)} به {money(int(t))} تومان تغییر داد.', exclude=u.id); return
+    if sst=='staffid' and has_perm(u.id,'staff') and m.text:
+        t=selfbot.fa2en(m.text).strip()
+        if t=='لغو':
+            context.user_data.pop('sup_step',None); await m.reply_text('لغو شد.'); return
+        if not t.isdigit():
+            await m.reply_text('❗️ فقط آیدی عددی بفرست (یا «لغو»).'); return
+        tid=int(t); context.user_data.pop('sup_step',None)
+        if tid in selfbot.ADMIN_IDS:
+            await m.reply_text('این کاربر ادمینه و همهٔ دسترسی‌ها رو داره.'); return
+        if _staff_row(tid) is None and tid not in selfbot.SUPPORT_IDS:
+            save_perms(tid, NEW_STAFF_PERMS & perms_of(u.id), u.id)
+            try: await context.bot.send_message(tid,'👥 به پنل پشتیبانی اضافه شدی. برای باز کردنش بنویس /support')
+            except Exception: pass
+            await _notify_admins(context, f'👥 {u.id} کاربر {tid} رو به پشتیبان‌ها اضافه کرد.', exclude=u.id)
+        await m.reply_text(f'👤 دسترسی‌های {tid} رو انتخاب کن:',reply_markup=_perm_kb(tid,u.id)); return
+    if context.user_data.get('gift_step')=='admin_new' and has_perm(u.id,'gift') and m.text:
         t=m.text.strip()
         if t=='لغو':
             context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
         await _gift_create(m, context, t); return
     gs=context.user_data.get('gift_step')
-    if gs=='disc_new' and u.id in selfbot.ADMIN_IDS and m.text:
+    if gs=='disc_new' and has_perm(u.id,'discount') and m.text:
         t=m.text.strip()
         if t=='لغو':
             context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
@@ -947,7 +1313,7 @@ async def incoming(update,context):
             await m.reply_text('فرمت درست نیست. مثال: 20 10  (۲۰٪ تخفیف، ۱۰ نفر) یا 20 10 72 (با اعتبار ۷۲ ساعته). برای لغو بنویس «لغو».'); return
         code=make_discount(pc,uses,hrs); context.user_data.pop('gift_step',None)
         await m.reply_text(f'🏷 کد تخفیف ساخته شد:\n\n{code}\n\n{pc}٪ تخفیف | 👥 {uses} بار استفاده'+(f' | ⏳ {hrs} ساعت' if hrs else '')+'\nکاربر از «خرید الماس» ← «کد تخفیف» واردش می‌کنه.'); return
-    if gs=='bc_wait' and is_staff(u.id):
+    if gs=='bc_wait' and has_perm(u.id,'broadcast'):
         if m.text and m.text.strip()=='لغو':
             context.user_data.pop('gift_step',None); await m.reply_text('لغو شد.'); return
         context.user_data.pop('gift_step',None)
@@ -960,6 +1326,15 @@ async def incoming(update,context):
     if not (m.text or m.photo or m.document): return
     if not await is_member(context.bot,u.id):
         await m.reply_text('برای استفاده باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
+    if gs=='qty' and m.text:
+        t=selfbot.fa2en(m.text).strip()
+        if t=='لغو':
+            context.user_data.pop('gift_step',None); n=_qty(context)
+            await m.reply_text(buy_text(_pct(context), n),reply_markup=buy_kb(n)); return
+        if not t.isdigit() or not MIN_QTY<=int(t)<=MAX_QTY:
+            await m.reply_text(f'❗️ یه عدد بین {MIN_QTY} تا {MAX_QTY} بفرست (یا «لغو»).'); return
+        n=int(t); context.user_data['buy_n']=n; context.user_data.pop('gift_step',None)
+        await m.reply_text(buy_text(_pct(context), n),reply_markup=buy_kb(n)); return
     if gs=='disc' and m.text:
         t=m.text.strip()
         if t=='لغو':
@@ -967,7 +1342,7 @@ async def incoming(update,context):
         res,pc=check_discount(u.id,t)
         if res=='ok':
             context.user_data.pop('gift_step',None); context.user_data['disc']={'code':t.upper(),'pct':pc}
-            await m.reply_text(f'✅ کد تخفیف {pc}٪ اعمال شد!\n\n'+buy_text(pc),reply_markup=buy_kb()); return
+            await m.reply_text(f'✅ کد تخفیف {pc}٪ اعمال شد!\n\n'+buy_text(pc,_qty(context)),reply_markup=buy_kb(_qty(context))); return
         msgs={'invalid':'❌ کد معتبر نیست؛ دوباره بفرست یا «لغو» بنویس.','expired':'⌛ این کد تخفیف منقضی شده.','finished':'😕 ظرفیت این کد تموم شده.','already':'ℹ️ این کد رو قبلاً استفاده کردی.'}
         if res!='invalid': context.user_data.pop('gift_step',None)
         await m.reply_text(msgs.get(res,'❌ کد معتبر نیست.')); return
@@ -1000,8 +1375,7 @@ async def incoming(update,context):
             p=Payment(user_id=u.id,plan=plan,status='pending',discount=pct,code=dcode,file_id=fid,file_kind=fkind); s.add(p); s.commit(); pid=p.id
         finally:s.close()
         context.user_data.pop('payment_plan',None)
-        final=PRICES.get(plan,0)*(100-pct)//100
-        recipients=set(selfbot.ADMIN_IDS)|set(selfbot.SUPPORT_IDS)
+        recipients=staff_ids('receipts')
         cap=pay_caption(pid,u.id,u.username,plan,pct,dcode)
         for staff in recipients:
             try:
@@ -1132,7 +1506,7 @@ async def adm_cb(update, context):
     q=update.callback_query
     act=(q.data or '').split(':')[1]
     if act in ('bc','bcall','bcself','bccancel','bclink'):
-        allowed=is_staff(q.from_user.id)
+        allowed=has_perm(q.from_user.id,'broadcast')
     else:
         allowed=q.from_user.id in selfbot.ADMIN_IDS
     if not allowed:
