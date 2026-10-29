@@ -360,6 +360,40 @@ def _st(d, k):
 MORE_ROWS_PER_PAGE = 8
 
 
+def toggle(uid, key):
+    """روشن/خاموش‌کردن یکی از سوئیچ‌های امکانات بیشتر (برای صفحهٔ یکپارچهٔ دستورات سلف)."""
+    if key not in TOGGLES:
+        return
+    d = sb._pget(uid)
+    d[key] = not bool(d.get(key))
+    if key == "ar_on" and d[key] and not d.get("ar_text"):
+        d["ar_text"] = DEFAULT_AR
+    sb._pput(uid, d)
+
+
+def more_rows(uid):
+    """همهٔ دکمه‌های «امکانات بیشتر» (سوئیچ‌ها + ابزارها) به‌صورت ردیف، بدون صفحه‌بندی."""
+    d = sb._pget(uid)
+    B = sb.B
+    wl = d.get("wl_items") or []
+    mu = d.get("mu_ids") or {}
+
+    def t(k, label):
+        return B(f"{label}: {_st(d, k)}", callback_data=f"self:mt:{k}:1", style="success" if d.get(k) else "primary")
+
+    rows = [
+        [t("ar_on", "پاسخ خودکار پی‌وی"), B("متن پاسخ", callback_data="self:ar_text", style="primary")],
+        [t("del_on", "خبر حذف/ویرایش پی‌وی")],
+        [t("ttl_on", "ذخیرهٔ مدیای تایمردار")],
+        [t("mn_on", "خبر منشن در گروه‌ها")],
+        [t("wl_on", f"ناظر کلمه/آیدی ({len(wl)})"), B("مدیریت ناظر", callback_data="self:wl", style="primary")],
+        [t("mu_on", f"سکوت پی‌وی ({len(mu)} نفر)"), B("مدیریت سکوت", callback_data="self:mu", style="primary")],
+    ]
+    tb = [B(TOOL_GUIDES[k][0], callback_data=f"self:tg:{k}", style="primary") for k in TOOL_ORDER]
+    rows += [tb[i:i + 2] for i in range(0, len(tb), 2)]
+    return rows
+
+
 def more_panel(uid, page=1):
     """«امکانات بیشتر»؛ همهٔ دکمه‌ها یک‌جا و توضیح هر امکان داخل خود دکمه است.
     اگه ردیف‌ها از MORE_ROWS_PER_PAGE بیشتر شد، خودکار می‌ره صفحهٔ بعد."""

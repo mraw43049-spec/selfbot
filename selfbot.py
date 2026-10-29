@@ -1969,11 +1969,6 @@ async def cb_user(update, context):
     if a in selfmodes.CB_ACTIONS:
         await selfmodes.handle_cb(uid, a, p, qm, context)
         return
-    import extras
-    if a in extras.CB_ACTIONS:
-        await extras.handle_cb(uid, a, p, qm, context)
-        return
-
     async def home():
         ud.pop("self_st", None)
         if getattr(qm, "is_inline", False):
@@ -1981,6 +1976,16 @@ async def cb_user(update, context):
             return
         t, kb = _panel(uid, q.from_user.first_name or "")
         await qm.edit_text(t, reply_markup=kb)
+
+    import extras
+    if a in ("more", "mt"):          # دیگه صفحهٔ جدا نداریم؛ همه‌چیز توی صفحهٔ دستورات سلف
+        if a == "mt" and len(p) > 2:
+            extras.toggle(uid, p[2])
+        await home()
+        return
+    if a in extras.CB_ACTIONS:
+        await extras.handle_cb(uid, a, p, qm, context)
+        return
 
     if a == "ping":
         client = _clients.get(uid)
@@ -2635,7 +2640,12 @@ def _inl_kb(uid, private=False):
         rows.extend(selfmodes.panel_rows(d))
     except Exception as e:  # noqa: BLE001
         logger.warning("selfmodes panel: %s", e)
-    rows.append([B("امکانات بیشتر", callback_data="self:more", style="success")])
+    try:
+        import extras
+        rows.extend(extras.more_rows(uid))      # همهٔ امکانات بیشتر توی همین صفحه
+    except Exception as e:  # noqa: BLE001
+        logger.warning("extras rows: %s", e)
+        rows.append([B("امکانات بیشتر", callback_data="self:more")])
     last = []
     uname = getattr(_botref[0], "username", "") if _botref[0] else ""
     if private:
