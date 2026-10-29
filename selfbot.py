@@ -23,8 +23,6 @@
 import asyncio
 import base64
 import hashlib
-import html
-import io
 import json
 import logging
 import os
@@ -1375,7 +1373,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "خوش": "welcome", "خوشامد": "welcome", "خوشآمد": "welcome", "خوشآمدگویی": "welcome", "welcome": "welcome",
         "کارت": "card", "card": "card",
         "ویدیو": "vnote", "ویدیومسیج": "vnote", "گرد": "vnote", "vnote": "vnote",
-        "عضویت": "joinall", "joinall": "joinall", "بکاپ": "backup",
+        "عضویت": "joinall", "joinall": "joinall",
         "استارز": "stars", "استار": "stars", "stars": "stars",
         "میم": "meme", "meme": "meme",
         "افزودن": "addmode", "لیست": "listmode",
@@ -1387,7 +1385,8 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson",
         "پاکسازی": "purge", "پاکسازی‌پیام": "purge", "purge": "purge", "پاک": "purge",
         "پینگ": "ping", "ping": "ping", "حذفپیام": "delmsg", "حذف": "delmsg", "delmsg": "delmsg",
-        "افزودنریاکشن": "bulkreact", "bulkreact": "bulkreact"}
+        "افزودنریاکشن": "bulkreact", "bulkreact": "bulkreact",
+        "بکاپ": "backup", "بکآپ": "backup", "backup": "backup"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
          "راست": "r", "right": "r", "r": "r", "خالی": "n", "هیچ": "n", "none": "n", "n": "n"}
 _AR2FA = str.maketrans("يك", "یک")
@@ -1591,6 +1590,157 @@ async def _purge(uid, ev, arg):
         _purging.discard(uid)
 
 
+BACKUP_MAX = int(os.environ.get("BACKUP_MAX", "20000") or 20000)
+_backing = set()
+
+
+def _bk_kind(m):
+    for attr, label in (("photo", "عکس"), ("video_note", "ویدیو مسیج"), ("video", "ویدیو"), ("voice", "ویس"),
+                        ("sticker", "استیکر"), ("gif", "گیف"), ("audio", "آهنگ"), ("document", "فایل")):
+        try:
+            if getattr(m, attr, None):
+                return label
+        except Exception:  # noqa: BLE001
+            pass
+    if getattr(m, "poll", None):
+        return "نظرسنجی"
+    if getattr(m, "geo", None) or getattr(m, "venue", None):
+        return "موقعیت مکانی"
+    if getattr(m, "contact", None):
+        return "مخاطب"
+    return "رسانه" if getattr(m, "media", None) else ""
+
+
+def _bk_time(dt):
+    """زمان پیام به وقت ایران (UTC+3:30)."""
+    from datetime import timedelta
+    try:
+        return (dt.astimezone(timezone.utc) + timedelta(hours=3, minutes=30)).strftime("%Y-%m-%d %H:%M")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _bk_html(title, me_name, msgs, total_note=""):
+    import html as _h
+    esc = lambda x: _h.escape(str(x or ""), quote=False)
+    out = []
+    last_day = None
+    for m in msgs:
+        day = _bk_time(m.date)[:10]
+        if day and day != last_day:
+            last_day = day
+            out.append(f'<div class="day">{esc(day)}</div>')
+        if getattr(m, "action", None) is not None and not (m.message or ""):
+            out.append(f'<div class="sys">پیام سیستمی • {esc(_bk_time(m.date)[11:])}</div>')
+            continue
+        mine = bool(getattr(m, "out", False))
+        who = me_name if mine else title
+        parts = []
+        if getattr(m, "fwd_from", None) is not None:
+            parts.append('<div class="meta">↪️ فوروارد شده</div>')
+        if getattr(m, "reply_to_msg_id", None):
+            parts.append(f'<div class="meta">↩️ پاسخ به پیام #{m.reply_to_msg_id}</div>')
+        kind = _bk_kind(m)
+        if kind:
+            parts.append(f'<div class="media">📎 {esc(kind)}</div>')
+        txt = m.message or ""
+        if txt:
+            parts.append(f'<div class="txt">{esc(txt)}</div>')
+        if not parts:
+            parts.append('<div class="media">(پیام خالی)</div>')
+        edited = " • ویرایش‌شده" if getattr(m, "edit_date", None) else ""
+        out.append(
+            f'<div class="msg {"out" if mine else "in"}"><div class="who">{esc(who)}</div>'
+            + "".join(parts)
+            + f'<div class="time">#{m.id} • {esc(_bk_time(m.date))}{edited}</div></div>')
+    head = (f'<h1>بکاپ چت با {esc(title)}</h1><div class="info">تعداد پیام: {len(msgs)} • '
+            f'گرفته‌شده: {esc(_bk_time(datetime.now(timezone.utc)))} (وقت ایران){esc(total_note)}</div>')
+    css = ("body{font-family:Tahoma,Vazirmatn,sans-serif;background:#e6ebee;margin:0;padding:16px;direction:rtl}"
+           ".wrap{max-width:720px;margin:auto}h1{font-size:18px;text-align:center}"
+           ".info{font-size:12px;color:#555;text-align:center;margin-bottom:14px}"
+           ".day{text-align:center;margin:14px 0 8px;font-size:12px;color:#fff;background:#8a9aa6;border-radius:12px;padding:3px 12px;width:max-content;margin-inline:auto}"
+           ".msg{max-width:80%;margin:6px 0;padding:8px 12px;border-radius:12px;box-shadow:0 1px 1px rgba(0,0,0,.12)}"
+           ".msg.in{background:#fff;margin-inline-end:auto}.msg.out{background:#d7f0c2;margin-inline-start:auto}"
+           ".who{font-size:12px;font-weight:bold;color:#2a7ab0;margin-bottom:3px}.out .who{color:#3b8a2a}"
+           ".txt{white-space:pre-wrap;word-wrap:break-word;font-size:14px;line-height:1.7}"
+           ".meta,.media{font-size:12px;color:#666;margin-bottom:2px}.media{color:#8a4b00}"
+           ".time{font-size:11px;color:#888;margin-top:4px;text-align:left;direction:ltr}"
+           ".sys{text-align:center;font-size:12px;color:#777;margin:6px 0}")
+    return ('<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>بکاپ چت - {esc(title)}</title><style>{css}</style></head><body><div class="wrap">'
+            + head + "".join(out) + "</div></body></html>")
+
+
+async def _backup_chat(uid, ev):
+    """.بکاپ چت ← همهٔ پیام‌های همین پی‌وی (حداکثر BACKUP_MAX تا) به‌صورت یک فایل HTML توی Saved Messages."""
+    import io
+    client = _clients.get(uid)
+    if not client:
+        await _say(uid, ev, "❌ اول اکانت سلف را وصل کن.")
+        return
+    if not ev.is_private:
+        await _say(uid, ev, "❌ بکاپ فقط توی چت پی‌وی کار می‌کنه؛ این دستور رو توی همون پی‌وی بنویس.")
+        return
+    if uid in _backing:
+        await _say(uid, ev, "⏳ یه بکاپ دیگه در حال انجامه؛ صبر کن تموم بشه.")
+        return
+    _backing.add(uid)
+    try:
+        await _say(uid, ev, "⏳ در حال بکاپ‌گیری از پیام‌های این چت...", keep=True)
+        from telethon.utils import get_display_name
+        chat = await ev.get_chat()
+        title = get_display_name(chat) or str(ev.chat_id)
+        me = await client.get_me()
+        me_name = get_display_name(me) or "من"
+        msgs = []
+        async for m in client.iter_messages(ev.chat_id, limit=BACKUP_MAX + 1):
+            if m.id == ev.id:
+                continue
+            msgs.append(m)
+            if len(msgs) >= BACKUP_MAX:
+                break
+        msgs.reverse()
+        if not msgs:
+            await _say(uid, ev, "پیامی برای بکاپ پیدا نشد.")
+            return
+        note = f" • فقط {BACKUP_MAX} پیام آخر" if len(msgs) >= BACKUP_MAX else ""
+        data = _bk_html(title, me_name, msgs, note).encode("utf-8")
+        bio = io.BytesIO(data)
+        safe = re.sub(r"[^\w\u0600-\u06FF-]+", "_", title)[:30].strip("_") or str(ev.chat_id)
+        bio.name = f"chat_backup_{safe}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.html"
+        await client.send_file("me", bio, force_document=True,
+                               caption=f"💾 بکاپ چت با {title}\nتعداد پیام: {len(msgs)}{note}")
+        await _say(uid, ev, f"✅ بکاپ {len(msgs)} پیام ساخته شد و توی Saved Messages فرستاده شد.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("self backup %s: %s", uid, exc)
+        await _say(uid, ev, "❌ بکاپ انجام نشد: " + str(exc)[:100])
+    finally:
+        _backing.discard(uid)
+
+
+async def _pvjoin_cmd(uid, ev, arg):
+    """.عضویت اجباری روشن | .عضویت اجباری خاموش"""
+    rest = re.sub(r"^(?:اجباری|اجبار)\s*", "", (arg or "").strip()).strip().lower()
+    d = _pget(uid)
+    if rest in ("روشن", "فعال", "on", "1"):
+        d["pv_join"] = True
+    elif rest in ("خاموش", "غیرفعال", "غیر فعال", "off", "0"):
+        d["pv_join"] = False
+    else:
+        st = "روشن" if d.get("pv_join") else "خاموش"
+        await _say(uid, ev, f"📢 عضویت اجباری پیوی الان {st} است.\nبنویس: .عضویت اجباری روشن  یا  .عضویت اجباری خاموش")
+        return
+    _pput(uid, d)
+    if d["pv_join"]:
+        chs = [x.strip().lstrip("@") for x in os.environ.get("SELF_PV_JOIN_CHANNELS", "selfsaz_iran,fox_frenzy").split(",") if x.strip()]
+        await _say(uid, ev, "✅ عضویت اجباری پیوی روشن شد؛ کسی که عضو کانال‌های زیر نباشه نمی‌تونه بهت پیام بده:\n"
+                   + "\n".join("@" + x for x in chs[:5]))
+    else:
+        await _say(uid, ev, "✅ عضویت اجباری پیوی خاموش شد.")
+
+
+
 async def _handle_dot(uid, ev):
     raw = ev.raw_text or ""
     if raw.strip() == "پنل":
@@ -1601,41 +1751,11 @@ async def _handle_dot(uid, ev):
     if not pc:
         return False
     cmd, arg = pc
-    # کنترل عضویت اجباری پیوی: .عضویت اجباری روشن / خاموش
-    if cmd == "joinall" and norm(arg).startswith("اجباری"):
-        parts = norm(arg).split()
-        if len(parts) >= 2 and parts[1] in ("روشن", "خاموش"):
-            d = _pget(uid)
-            d["pv_join"] = parts[1] == "روشن"
-            _pput(uid, d)
-            await _say(uid, ev, "💠 عضویت اجباری پیوی " + ("روشن شد." if d["pv_join"] else "خاموش شد."))
-            return True
+    if cmd == "joinall" and re.match(r"^(?:اجباری|اجبار)(?:\s|$)", arg or ""):
+        await _pvjoin_cmd(uid, ev, arg)      # «.عضویت همه» سر جاش می‌مونه؛ فقط «.عضویت اجباری ...» اینجا هندل می‌شه
+        return True
     if cmd == "backup":
-        client = _clients.get(uid)
-        if not client:
-            await _say(uid, ev, "❌ اول اکانت سلف را وصل کن.")
-            return True
-        if not ev.is_private:
-            await _say(uid, ev, "⚠️ برای جلوگیری از خروجی ناخواسته، .بکاپ چت را فقط داخل پیوی اجرا کن.")
-            return True
-        try:
-            from datetime import timezone
-            rows = []
-            async for msg in client.iter_messages(ev.chat_id, reverse=True):
-                dt = msg.date
-                stamp = dt.strftime("%Y-%m-%d %H:%M:%S UTC") if dt else ""
-                sender = "من" if msg.out else "طرف مقابل"
-                body = msg.message or ""
-                if msg.media:
-                    body += ("\n[پیوست رسانه‌ای؛ فایل رسانه داخل این HTML جاسازی نشده است]")
-                rows.append(f"<article><h3>{html.escape(sender)} — {html.escape(stamp)}</h3><p>{html.escape(body).replace(chr(10), '<br>')}</p></article><hr>")
-            document = "<!doctype html><html lang='fa'><head><meta charset='utf-8'><title>بکاپ چت</title><style>body{font-family:Arial,sans-serif;direction:rtl;max-width:900px;margin:30px auto;padding:0 16px}article{white-space:normal;overflow-wrap:anywhere}h3{font-size:14px;color:#555}p{line-height:1.8}</style></head><body><h1>بکاپ چت</h1>" + "".join(rows) + "</body></html>"
-            payload = io.BytesIO(document.encode("utf-8"))
-            payload.name = "chat_backup.html"
-            await client.send_file("me", payload, caption=f"📦 بکاپ HTML چت — {len(rows)} پیام")
-            await _say(uid, ev, f"✅ بکاپ {len(rows)} پیام به Saved Messages ارسال شد.")
-        except Exception as exc:
-            await _say(uid, ev, "❌ بکاپ انجام نشد: " + str(exc)[:160])
+        await _backup_chat(uid, ev)
         return True
     if cmd == "addmode":
         # «.افزودن ری اکشن 🔥» (راهنمای قدیمیِ ریاکشن گروهی) هم کار کنه
