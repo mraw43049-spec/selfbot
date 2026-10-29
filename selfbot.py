@@ -2564,15 +2564,16 @@ async def user_banner(uid, fresh=False):
 
 
 def _blue(kb):
-    """همهٔ دکمه‌های پنل: آبی (primary) و بدون ایموجی."""
+    """دکمه‌های پنل: ردیف‌ها یک‌درمیون؛ ردیف اول آبی (primary)، ردیف بعد بی‌رنگ (بدون style)، و همین‌طور تا آخر. بدون ایموجی."""
     if kb is None or not getattr(kb, "inline_keyboard", None):
         return kb
     rows = []
-    for row in kb.inline_keyboard:
+    for i, row in enumerate(kb.inline_keyboard):
         nr = []
         for b in row:
             kw = {k: v for k, v in (b.api_kwargs or {}).items() if k != "style"}
-            kw["style"] = "primary"
+            if i % 2 == 0:
+                kw["style"] = "primary"
             extra = {}
             if b.callback_data is not None:
                 extra["callback_data"] = b.callback_data

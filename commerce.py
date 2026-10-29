@@ -661,8 +661,9 @@ class _Shim:
     async def edit_message_caption(self, *a, **k): raise RuntimeError('shim')
     async def edit_message_reply_markup(self, *a, **k): pass
 
-_IMG = {'buy': 'banner_buy.png', 'activate': 'banner_activate.png'}
+_IMG = {'buy': 'banner_buy.jpg', 'activate': 'banner_activate.jpg', 'account': 'banner_account.jpg'}
 _IMG_ID = {}
+_MSG_IMG = {}    # (chat_id, message_id) -> کلید عکسی که الان روی اون پیامه؛ برای اینکه بین منوها عکس درست عوض بشه
 
 async def show_panel(q, text, **kwargs):
     m = q.message
@@ -679,7 +680,8 @@ async def show_panel(q, text, **kwargs):
 async def show_photo(q, context, key, caption, reply_markup=None, parse_mode=None):
     """صفحهٔ عکس‌دار؛ اگه همین الان عکس‌داره فقط کپشن/دکمه‌ها عوض می‌شن، وگرنه پیام قبلی پاک و عکس جدید می‌ره."""
     m = q.message
-    if getattr(m, 'photo', None) and not getattr(q, 'is_shim', False):
+    same_img = _MSG_IMG.get((m.chat_id, m.message_id)) == key
+    if getattr(m, 'photo', None) and not getattr(q, 'is_shim', False) and same_img:
         try:
             await q.edit_message_caption(caption=caption[:1024], reply_markup=reply_markup, parse_mode=parse_mode); return
         except Exception as e:  # noqa: BLE001
@@ -697,6 +699,9 @@ async def _send_photo(bot, chat_id, key, caption, reply_markup=None, parse_mode=
             with open(path, 'rb') as f: src = f.read()
         sm = await bot.send_photo(chat_id, src, caption=caption[:1024], reply_markup=reply_markup, parse_mode=parse_mode)
         if key not in _IMG_ID and sm.photo: _IMG_ID[key] = sm.photo[-1].file_id
+        if sm.photo:
+            _MSG_IMG[(chat_id, sm.message_id)] = key
+            while len(_MSG_IMG) > 3000: _MSG_IMG.pop(next(iter(_MSG_IMG)))
         return sm
     except Exception:
         import logging; logging.getLogger(__name__).exception('banner send failed')
@@ -787,7 +792,7 @@ async def callback(update,context,_q=None,_data=None):
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
         await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
     elif data=='shop:board': await show_panel(q, board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
-    elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('داشبورد',callback_data='shop:board',style='success')],[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:dash': await show_photo(q, context, 'account', f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',KB([[B('داشبورد',callback_data='shop:board',style='success')],[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
     elif data=='shop:buy':
