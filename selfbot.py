@@ -23,6 +23,8 @@
 import asyncio
 import base64
 import hashlib
+import html
+import io
 import json
 import logging
 import os
@@ -1373,7 +1375,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "خوش": "welcome", "خوشامد": "welcome", "خوشآمد": "welcome", "خوشآمدگویی": "welcome", "welcome": "welcome",
         "کارت": "card", "card": "card",
         "ویدیو": "vnote", "ویدیومسیج": "vnote", "گرد": "vnote", "vnote": "vnote",
-        "عضویت": "joinall", "joinall": "joinall",
+        "عضویت": "joinall", "joinall": "joinall", "بکاپ": "backup",
         "استارز": "stars", "استار": "stars", "stars": "stars",
         "میم": "meme", "meme": "meme",
         "افزودن": "addmode", "لیست": "listmode",
@@ -1599,6 +1601,42 @@ async def _handle_dot(uid, ev):
     if not pc:
         return False
     cmd, arg = pc
+    # کنترل عضویت اجباری پیوی: .عضویت اجباری روشن / خاموش
+    if cmd == "joinall" and norm(arg).startswith("اجباری"):
+        parts = norm(arg).split()
+        if len(parts) >= 2 and parts[1] in ("روشن", "خاموش"):
+            d = _pget(uid)
+            d["pv_join"] = parts[1] == "روشن"
+            _pput(uid, d)
+            await _say(uid, ev, "💠 عضویت اجباری پیوی " + ("روشن شد." if d["pv_join"] else "خاموش شد."))
+            return True
+    if cmd == "backup":
+        client = _clients.get(uid)
+        if not client:
+            await _say(uid, ev, "❌ اول اکانت سلف را وصل کن.")
+            return True
+        if not ev.is_private:
+            await _say(uid, ev, "⚠️ برای جلوگیری از خروجی ناخواسته، .بکاپ چت را فقط داخل پیوی اجرا کن.")
+            return True
+        try:
+            from datetime import timezone
+            rows = []
+            async for msg in client.iter_messages(ev.chat_id, reverse=True):
+                dt = msg.date
+                stamp = dt.strftime("%Y-%m-%d %H:%M:%S UTC") if dt else ""
+                sender = "من" if msg.out else "طرف مقابل"
+                body = msg.message or ""
+                if msg.media:
+                    body += ("\n[پیوست رسانه‌ای؛ فایل رسانه داخل این HTML جاسازی نشده است]")
+                rows.append(f"<article><h3>{html.escape(sender)} — {html.escape(stamp)}</h3><p>{html.escape(body).replace(chr(10), '<br>')}</p></article><hr>")
+            document = "<!doctype html><html lang='fa'><head><meta charset='utf-8'><title>بکاپ چت</title><style>body{font-family:Arial,sans-serif;direction:rtl;max-width:900px;margin:30px auto;padding:0 16px}article{white-space:normal;overflow-wrap:anywhere}h3{font-size:14px;color:#555}p{line-height:1.8}</style></head><body><h1>بکاپ چت</h1>" + "".join(rows) + "</body></html>"
+            payload = io.BytesIO(document.encode("utf-8"))
+            payload.name = "chat_backup.html"
+            await client.send_file("me", payload, caption=f"📦 بکاپ HTML چت — {len(rows)} پیام")
+            await _say(uid, ev, f"✅ بکاپ {len(rows)} پیام به Saved Messages ارسال شد.")
+        except Exception as exc:
+            await _say(uid, ev, "❌ بکاپ انجام نشد: " + str(exc)[:160])
+        return True
     if cmd == "addmode":
         # «.افزودن ری اکشن 🔥» (راهنمای قدیمیِ ریاکشن گروهی) هم کار کنه
         m_ = re.match(r"^(?:ری[\s\u200c]*اکشن|واکنش|react(?:ion)?)\s*(.*)$", arg or "", re.I | re.S)
