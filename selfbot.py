@@ -36,6 +36,7 @@ from telegram import InlineQueryResultArticle, InlineQueryResultCachedPhoto, Inl
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, InlineQueryHandler, MessageHandler, filters
 
 from database import Base, get_session
+import selffonts
 
 
 # ---------- دکمه‌های رنگی (بدون ایموجی) ----------
@@ -401,26 +402,19 @@ async def _on_out(uid, ev):
             return
     if await _handle_dot(uid, ev):
         return
-    # Apply selected Unicode font to ordinary text messages. Commands remain untouched.
+    # فونت «حالت متن» (+ افکت تایپ حرف‌به‌حرف) روی پیام‌های معمولی؛ دستورها (با نقطه) دست نمی‌خورن.
     dfont = _pget(uid)
     mode = dfont.get("font_mode", "ساده")
-    fmap = _FONT_MAPS.get(mode)
+    fx = bool(dfont.get("type_fx"))
     original = (ev.raw_text or "")
-    if fmap and original and not original.lstrip().startswith((".", "/")) and not ev.media:
+    if ((mode != "ساده" and mode in selffonts.FONTS) or fx) and original and not ev.media \
+            and not original.lstrip().startswith((".", "/")) and not _keeps_entities(ev):
         try:
-            changed = original.translate(fmap)
-            # Unicode styled alphabets cover Latin letters but not Persian. Use Telegram
-            # formatting entities for Persian text, while retaining styled Latin letters.
-            if mode in ("بولد", "ایتالیک", "مونو") and re.search(r"[\u0600-\u06FF]", original):
-                import html as _html
-                tag = {"بولد": "b", "ایتالیک": "i", "مونو": "code"}[mode]
-                if mode == "بولد":
-                    changed = original.translate(fmap) if fmap else original
-                # Escape text before wrapping so user input cannot inject markup.
-                safe = _html.escape(changed, quote=False)
-                await ev.edit(f"<{tag}>{safe}</{tag}>", parse_mode="html")
-            elif changed != original:
-                await ev.edit(changed, parse_mode=None)
+            if fx:
+                # انیمیشن توی تسک جدا اجرا می‌شه تا بقیهٔ کارها (کلمه‌های خودکار) معطل نشن
+                asyncio.create_task(selffonts.apply(uid, ev, original, mode, True, dfont.get("type_speed", 2)))
+            else:
+                await selffonts.apply(uid, ev, original, mode, False)
         except Exception as e:
             logger.debug("font transform skipped %s: %s", uid, e)
     if _paused.get(uid):
@@ -442,6 +436,17 @@ async def _on_out(uid, ev):
             _hist[uid] = h
             _last[(uid, i)] = now
             asyncio.create_task(_fire(uid, ev, s))
+
+
+def _keeps_entities(ev):
+    """پیامی که ایموجی پرمیوم یا لینک متنی داره رو دست نمی‌زنیم (ادیت با متن خام اون‌ها رو پاک می‌کنه)."""
+    try:
+        for e in (getattr(ev.message, "entities", None) or []):
+            if type(e).__name__ in ("MessageEntityCustomEmoji", "MessageEntityTextUrl"):
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 def _pick_button(msg, pos):
@@ -1378,6 +1383,7 @@ _CMD = {"پنل": "panel", "panel": "panel", "منو": "panel",
         "تیک": "tiktok", "تیکتاک": "tiktok", "tiktok": "tiktok", "tt": "tiktok",
         "پینترست": "pinterest", "پینترس": "pinterest", "pinterest": "pinterest",
         "استوری": "story", "story": "story", "کار": "work", "work": "work", "درس": "lesson", "lesson": "lesson",
+        "پاکسازی": "purge", "پاکسازی‌پیام": "purge", "purge": "purge", "پاک": "purge",
         "پینگ": "ping", "ping": "ping", "حذفپیام": "delmsg", "حذف": "delmsg", "delmsg": "delmsg",
         "افزودنریاکشن": "bulkreact", "bulkreact": "bulkreact"}
 _POSW = {"چپ": "l", "left": "l", "l": "l", "وسط": "m", "میانه": "m", "mid": "m", "middle": "m", "m": "m",
@@ -1512,6 +1518,77 @@ async def _find_chat(client, name):
     return [d for d in ds if q in norm(d[1])]
 
 
+_purging = set()
+PURGE_MAX = int(os.environ.get("PURGE_MAX", "1000") or 1000)
+PURGE_USER_MAX = 100
+
+
+async def _purge(uid, ev, arg):
+    """.پاکسازی 50 | .پاکسازی همه | ریپلای + .پاکسازی | ریپلای + .پاکسازی کاربر"""
+    client = _clients.get(uid)
+    if not client:
+        await _say(uid, ev, "❌ اول اکانت سلف را وصل کن.")
+        return
+    if uid in _purging:
+        await _say(uid, ev, "⏳ یه پاکسازی در حال انجامه؛ صبر کن تموم بشه.")
+        return
+    a = fa2en((arg or "").strip()).lower()
+    reply = None
+    if ev.is_reply:
+        try:
+            reply = await ev.get_reply_message()
+        except Exception:  # noqa: BLE001
+            reply = None
+    kw = {}
+    if a in ("همه", "all"):
+        kw = {"from_user": "me", "limit": PURGE_MAX + 1}
+    elif a.isdigit():
+        kw = {"from_user": "me", "limit": max(1, min(int(a), PURGE_MAX)) + 1}
+    elif a == "" and reply:
+        kw = {"from_user": "me", "min_id": reply.id - 1, "limit": PURGE_MAX + 1}
+    elif a in ("کاربر", "user") and reply:
+        try:
+            kw = {"from_user": await reply.get_input_sender(), "limit": PURGE_USER_MAX + 1}
+        except Exception:  # noqa: BLE001
+            kw = {}
+        if not kw.get("from_user"):
+            await _say(uid, ev, "❌ فرستندهٔ این پیام قابل شناسایی نیست.")
+            return
+    else:
+        await _say(uid, ev, "🧹 پاکسازی\n.پاکسازی 50 ← ۵۰ پیام آخر خودت\n.پاکسازی همه ← همهٔ پیام‌های خودت توی این چت\n"
+                            "ریپلای + .پاکسازی ← پیام‌های خودت از اون پیام تا آخر\nریپلای + .پاکسازی کاربر ← پیام‌های اون کاربر (نیاز به ادمین بودن)", keep=True)
+        return
+    _purging.add(uid)
+    try:
+        chat = await ev.get_input_chat()
+        ids = []
+        async for m in client.iter_messages(chat, **kw):
+            if m.id != ev.id:
+                ids.append(m.id)
+        if not ids:
+            await _say(uid, ev, "🧹 پیامی برای پاک‌کردن پیدا نشد.")
+            return
+        await _say(uid, ev, f"🧹 در حال پاک‌کردن {len(ids)} پیام…", keep=True)
+        done, err = 0, ""
+        for i in range(0, len(ids), 100):
+            chunk = ids[i:i + 100]
+            try:
+                res = await client.delete_messages(chat, chunk, revoke=True)
+                done += sum(getattr(x, "pts_count", 0) for x in (res or [])) or len(chunk)
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)[:100]
+                break
+            await asyncio.sleep(1.0)       # مکث بین دسته‌ها؛ محافظت از اکانت
+        msg = f"🧹 {done} پیام پاک شد ✅"
+        if err:
+            msg += "\n⚠️ ادامه نیافت: " + err
+        await _say(uid, ev, msg)
+    except Exception as exc:  # noqa: BLE001
+        await _say(uid, ev, "❌ پاکسازی انجام نشد: " + str(exc)[:100])
+    finally:
+        _purging.discard(uid)
+
+
 async def _handle_dot(uid, ev):
     raw = ev.raw_text or ""
     if raw.strip() == "پنل":
@@ -1561,6 +1638,9 @@ async def _handle_dot(uid, ev):
             except Exception: pass
         except Exception as exc:
             await _say(uid, ev, "❌ حذف پیام انجام نشد: " + str(exc)[:100])
+        return True
+    if cmd == "purge":
+        await _purge(uid, ev, arg)
         return True
     if cmd == "bulkreact":
         if not ev.is_reply:
@@ -1849,12 +1929,7 @@ async def _mirror_typing(uid, client, update):
         logger.debug("typing mirror failed for %s: %s", uid, exc)
 
 # ---------- امکانات تکمیلی پنل ----------
-_FONT_MAPS = {
-    "ساده": None,
-    "بولد": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝗔𝗕𝗖𝗗𝗘𝗙𝗚𝗛𝗜𝗝𝗞𝗟𝗠𝗡𝗢𝗣𝗤𝗥𝗦𝗧𝗨𝗩𝗪𝗫𝗬𝗭𝗮𝗯𝗰𝗱𝗲𝗳𝗴𝗵𝗶𝗷𝗸𝗹𝗺𝗻𝗼𝗽𝗾𝗿𝘀𝘁𝘂𝘃𝘄𝘅𝘆𝘇"),
-    "ایتالیک": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝘈𝘉𝘊𝘋𝘌𝘍𝘎𝘏𝘐𝘑𝘒𝘓𝘔𝘕𝘖𝘗𝘘𝘙𝘚𝘛𝘜𝘝𝘞𝘟𝘠𝘡𝘢𝘣𝘤𝘥𝘦𝘧𝘨𝘩𝘪𝘫𝘬𝘭𝘮𝘯𝘰𝘱𝘲𝘳𝘴𝘵𝘶𝘷𝘸𝘹𝘺𝘻"),
-    "مونو": str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "𝙰𝙱𝙲𝙳𝙴𝙵𝙶𝙷𝙸𝙹𝙺𝙻𝙼𝙽𝙾𝙿𝚀𝚁𝚂𝚃𝚄𝚅𝚆𝚇𝚈𝚉𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣"),
-}
+# فونت‌های «حالت متن» توی selffonts.py هستن (نام‌ها: selffonts.FONTS)
 
 async def _translate_text(text):
     # Google Translate endpoint; requires server internet access.
@@ -2078,16 +2153,27 @@ async def cb_user(update, context):
         _sync_presence(uid)
         await home()
     elif a == "fonts":
-        d = _pget(uid)
-        current = d.get("font_mode", "ساده")
-        rows = [[B(name + (" (انتخاب‌شده)" if name == current else ""), callback_data="self:font:" + name)] for name in _FONT_MAPS]
-        rows.append([B("بازگشت", callback_data="self:home")])
-        await qm.edit_text("فونت پیام‌های بعدی را انتخاب کن:", reply_markup=KB(rows))
+        page = int(p[2]) if len(p) > 2 and p[2].isdigit() else 0
+        tx, kb = selffonts.menu(_pget(uid), page, B, KB)
+        await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
     elif a == "font":
-        name = ":".join(p[2:])
-        if name in _FONT_MAPS:
+        page = int(p[2]) if len(p) > 2 and p[2].isdigit() else 0
+        name = ":".join(p[3:])
+        if name in selffonts.FONTS:
             d = _pget(uid); d["font_mode"] = name; _pput(uid, d)
-        await home()
+        tx, kb = selffonts.menu(_pget(uid), page, B, KB)
+        await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
+    elif a in ("tfx", "tspd"):
+        page = int(p[2]) if len(p) > 2 and p[2].isdigit() else 0
+        d = _pget(uid)
+        if a == "tfx":
+            d["type_fx"] = not bool(d.get("type_fx"))
+        else:
+            cur = d.get("type_speed", 2)
+            d["type_speed"] = 1 if cur >= 3 else (cur if cur in (1, 2) else 2) + 1
+        _pput(uid, d)
+        tx, kb = selffonts.menu(d, page, B, KB)
+        await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
     elif a == "clk":
         tx, kb = _clock_panel(uid)
         await qm.edit_text(tx, reply_markup=kb, parse_mode="HTML")
@@ -2630,7 +2716,7 @@ def _inl_kb(uid, private=False):
     if tgt:
         trow.append(B("حذف مقصد", callback_data="self:typing_clear", style="danger"))
     rows.insert(3, trow)
-    rows.insert(4, [B("حالت متن: " + d.get("font_mode", "ساده"), callback_data="self:fonts", style="primary")])
+    rows.insert(4, [B(selffonts.label(d), callback_data="self:fonts", style="primary")])
     rows.insert(2, [B("🏓 پینگ", callback_data="self:ping", style="primary"),
                     B("🗑 حذف پیام", callback_data="self:delhelp", style="danger")])
     rows.insert(3, [B("🔥 ریاکشن گروهی", callback_data="self:bulkhelp", style="primary")])
