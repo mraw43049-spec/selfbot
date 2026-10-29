@@ -7,7 +7,7 @@ import secrets
 import time
 from decimal import Decimal
 from sqlalchemy import Column, BigInteger, String, Numeric, Integer, Boolean, inspect, text
-from telegram import InlineKeyboardButton as _B, InlineKeyboardMarkup as KB
+from telegram import InlineKeyboardButton as _B, InlineKeyboardMarkup as KB, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 from database import Base, get_session
 import selfbot
@@ -303,16 +303,24 @@ def btn(text, data=None, url=None, style="primary"):
         return B(text, url=url, **kw)
     return B(text, callback_data=data, **kw)
 
+# منوی اصلی؛ همون چیدمان عکس: کیبورد ثابت پایین چت (و نسخهٔ اینلاین برای دکمهٔ «منوی اصلی»).
+# (متن دکمه، کلید، رنگ؛ None = پیش‌فرض/خاکستری). ترتیب هر ردیف همون ترتیب نمایش روی صفحه‌ست.
+MENU_ROWS = [
+    [('فعالسازی سلف', 'activate', 'success')],
+    [('مدیریت گروه و بازی', 'panel', None), ('حساب کاربری', 'account', None)],
+    [('خرید الماس', 'buy', 'primary')],
+    [('انتقال الماس', 'transfer', 'primary'), ('الماس رایگان', 'free', None), ('راهنما و پشتیبانی', 'help', 'primary')],
+]
+MENU_TEXT = {t: k for row in MENU_ROWS for t, k, _ in row}
+MENU_DATA = {'activate': 'shop:create', 'account': 'shop:dash', 'panel': 'shop:panel', 'buy': 'shop:buy',
+             'transfer': 'shop:transfer', 'free': 'shop:free', 'help': 'shop:helpmenu'}
+
+def main_reply_kb():
+    return ReplyKeyboardMarkup([[KeyboardButton(t, api_kwargs=({'style': st} if st else None)) for t, k, st in row] for row in MENU_ROWS],
+                               resize_keyboard=True, is_persistent=True, input_field_placeholder='یکی از گزینه‌ها رو انتخاب کن')
+
 def home_kb():
-    return KB([
-        [btn('ساخت سلف', 'shop:create', style='success')],
-        [btn('خرید الماس', 'shop:buy')],
-        [btn('دعوت دوستان', 'shop:invite'), btn('انتقال الماس', 'shop:transfer')],
-        [btn('کد هدیه', 'shop:code', style='success')],
-        [btn('آموزش استفاده', 'shop:help'), btn('درباره سلف', 'shop:about')],
-        [btn('تیکت پشتیبانی', 'shop:ticket', style='success')],
-        [btn('داشبورد', 'shop:board', style='success'), btn('حساب کاربری', 'shop:dash')],
-    ])
+    return KB([[_B(t, callback_data=MENU_DATA[k], api_kwargs=({'style': st} if st else None)) for t, k, st in row] for row in MENU_ROWS])
 def join_kb():
     rows=[[B('عضویت در '+ch, url=url)] for ch,url in CHANNELS]
     rows.append([B('✅ عضو شدم',callback_data='shop:check')]); return KB(rows)
@@ -623,7 +631,7 @@ async def start(update,context):
         except Exception:
             pass
     trial_msg = f'\n🎁 {TRIAL_BONUS} الماس هدیهٔ شروع گرفتی (معادل ۵ روز سلف)!' if trial_new else ''
-    await update.effective_message.reply_text(welcome_text(u.first_name or '', wallet(u.id)['balance']) + trial_msg, reply_markup=home_kb())
+    await update.effective_message.reply_text(welcome_text(u.first_name or '', wallet(u.id)['balance']) + trial_msg, reply_markup=main_reply_kb())
 def _span(hours):
     h = int(hours)
     d, h = divmod(h, 24)
@@ -643,14 +651,62 @@ def board_text(uid):
             '👆 آیدی رو لمس کن تا کپی بشه.\n'
             'ℹ️ «مصرف‌شده» از نسخهٔ جدید به بعد حساب می‌شه.')
 
+class _Shim:
+    """وقتی کاربر دکمهٔ کیبورد پایین چت رو می‌زنه، مثل یه callback رفتار می‌کنه (جواب‌ها پیام جدید می‌شن)."""
+    is_shim = True
+    def __init__(self, user, message):
+        self.from_user = user; self.message = message
+    async def answer(self, *a, **k): pass
+    async def edit_message_text(self, *a, **k): raise RuntimeError('shim')
+    async def edit_message_caption(self, *a, **k): raise RuntimeError('shim')
+    async def edit_message_reply_markup(self, *a, **k): pass
+
+_IMG = {'buy': 'banner_buy.png', 'activate': 'banner_activate.png'}
+_IMG_ID = {}
+
 async def show_panel(q, text, **kwargs):
+    m = q.message
+    if getattr(m, 'photo', None):        # از یه صفحهٔ عکس‌دار می‌ریم به صفحهٔ متنی
+        try: await m.delete()
+        except Exception: pass
+        await m.chat.send_message(text, **kwargs)
+        return
     try:
         await q.edit_message_text(text, **kwargs)
     except Exception:
-        await q.message.reply_text(text, **kwargs)
+        await m.reply_text(text, **kwargs)
 
-async def callback(update,context):
-    q=update.callback_query; uid=q.from_user.id; data=q.data or ''; await q.answer()
+async def show_photo(q, context, key, caption, reply_markup=None, parse_mode=None):
+    """صفحهٔ عکس‌دار؛ اگه همین الان عکس‌داره فقط کپشن/دکمه‌ها عوض می‌شن، وگرنه پیام قبلی پاک و عکس جدید می‌ره."""
+    m = q.message
+    if getattr(m, 'photo', None) and not getattr(q, 'is_shim', False):
+        try:
+            await q.edit_message_caption(caption=caption[:1024], reply_markup=reply_markup, parse_mode=parse_mode); return
+        except Exception as e:  # noqa: BLE001
+            if 'not modified' in str(e).lower(): return
+    if not getattr(q, 'is_shim', False):
+        try: await m.delete()
+        except Exception: pass
+    await _send_photo(context.bot, m.chat_id, key, caption, reply_markup, parse_mode)
+
+async def _send_photo(bot, chat_id, key, caption, reply_markup=None, parse_mode=None):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _IMG[key])
+    src = _IMG_ID.get(key)
+    try:
+        if not src:
+            with open(path, 'rb') as f: src = f.read()
+        sm = await bot.send_photo(chat_id, src, caption=caption[:1024], reply_markup=reply_markup, parse_mode=parse_mode)
+        if key not in _IMG_ID and sm.photo: _IMG_ID[key] = sm.photo[-1].file_id
+        return sm
+    except Exception:
+        import logging; logging.getLogger(__name__).exception('banner send failed')
+        return await bot.send_message(chat_id, caption, reply_markup=reply_markup, parse_mode=parse_mode)
+
+async def _buy_screen(bot, chat_id, context, n):
+    return await _send_photo(bot, chat_id, 'buy', buy_text(_pct(context), n), buy_kb(n))
+
+async def callback(update,context,_q=None,_data=None):
+    q=_q or update.callback_query; uid=q.from_user.id; data=_data or q.data or ''; await q.answer()
     if data=='shop:check':
         if not await is_member(context.bot,uid): await show_panel(q, 'هنوز عضویت هر دو کانال تأیید نشده؛ بعد از عضویت دوباره بزن.',reply_markup=join_kb()); return
         until, trial_new = start_trial(uid) if TRIAL_ENABLED else (None, False)
@@ -664,13 +720,50 @@ async def callback(update,context):
             except Exception:
                 pass
         note = f'\n🎁 {TRIAL_BONUS} الماس هدیهٔ شروع گرفتی (معادل ۵ روز سلف)!' if trial_new else ''
-        await show_panel(q, '✅ عضویتت تأیید شد!\n\n' + welcome_text(q.from_user.first_name or '', wallet(uid)['balance']) + note,reply_markup=home_kb()); return
+        await show_panel(q, '✅ عضویتت تأیید شد!\n\n' + welcome_text(q.from_user.first_name or '', wallet(uid)['balance']) + note)
+        await context.bot.send_message(uid, '👇 منوی اصلی از پایین در دسترسته.', reply_markup=main_reply_kb()); return
     if not await is_member(context.bot,uid):
         await show_panel(q, 'برای ادامه باید عضو هر دو کانال باشی.',reply_markup=join_kb()); return
     w=wallet(uid)
     if data=='shop:home': await show_panel(q, 'منوی اصلی',reply_markup=home_kb())
     elif data=='shop:create':
-        await show_panel(q, ('⚠️ الماس کافی نداری؛ بدون الماس سلف فعال نمی‌شه. اول از «خرید الماس» شارژ کن.\n\n' if w['balance'] < ACTIVATE_COST and not (w.get('trial_until') and int(w['trial_until']) > int(time.time())) else '') + f'💎 موجودی فعلی: {w["balance"]}\nهر بار روشن‌کردن: ۵ الماس\nهزینه‌ی ساعتی در حالت روشن: ۲ الماس؛ در حالت خاموش: ۰٫۲ الماس.',reply_markup=KB([[B('▶️ روشن کردن',callback_data='shop:on')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('👤 حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
+        trial_active = bool(w.get('trial_until') and int(w['trial_until']) > int(time.time()))
+        bal = Decimal(w['balance']); started = w['self_started']
+        rate = Decimal('2.0') if started else Decimal('0.2')
+        left = _span(bal / rate) if bal > 0 else '۰ ساعت'
+        low = bal < ACTIVATE_COST and not trial_active
+        cap = ('⚡️ <b>فعال‌سازی سلف روباهیو</b>\n\n'
+               f'<blockquote>💎 موجودی: <b>{fmt_bal(bal)}</b> الماس\n'
+               f'🔌 وضعیت: <b>{"روشن ✅" if started else "خاموش ⏹"}</b>\n'
+               f'⏳ شارژ کافی برای: <b>{left}</b></blockquote>\n'
+               '<blockquote>🤖 پاسخ خودکار  •  🛡 ضدحذف و ویرایش\n🎮 بازی خودکار  •  🕒 ساعت زنده\n🌐 ترجمه  •  🏷 تگ اعضا</blockquote>\n'
+               '💰 <b>هزینه‌ها</b>\n'
+               f'▫️ فعال‌سازی: <b>{ACTIVATE_COST}</b> الماس (یک‌بار)\n'
+               '▫️ حالت روشن: ساعتی <b>۲</b> الماس\n'
+               '▫️ حالت خاموش: ساعتی <b>۰٫۲</b> الماس\n\n'
+               + ('⚠️ <b>الماس کافی نداری.</b> از «خرید الماس» یا «الماس رایگان» شارژ کن.' if low
+                  else '✅ آماده‌ای! «روشن کردن» رو بزن و اکانتت رو وصل کن.'))
+        await show_photo(q, context, 'activate', cap, KB([[B('روشن کردن',callback_data='shop:on')],[B('خاموش کردن',callback_data='shop:off')],
+                         [B('خرید الماس',callback_data='shop:buy'),B('حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]), parse_mode='HTML')
+    elif data=='shop:panel':
+        try:
+            if not selfbot._allowed(uid):
+                await show_panel(q, 'پنل سلف بعد از فعال‌سازی در دسترسته. اول «فعالسازی سلف» رو بزن.', reply_markup=KB([[B('فعالسازی سلف',callback_data='shop:create',style='success')],[B('منوی اصلی',callback_data='shop:home')]]))
+            else:
+                await selfbot.send_panel(context.bot, uid, q.from_user.first_name or '')
+        except Exception:
+            pass
+    elif data=='shop:helpmenu':
+        await show_panel(q, '🆘 راهنما و پشتیبانی\n\nآموزش استفاده، توضیح سلف یا ارتباط با پشتیبانی رو از دکمه‌های زیر انتخاب کن.',
+                         reply_markup=KB([[B('آموزش استفاده',callback_data='shop:help'),B('درباره سلف',callback_data='shop:about')],
+                                          [B('تیکت پشتیبانی',callback_data='shop:ticket',style='success')],
+                                          [B('پشتیبان',url='https://t.me/'+SUPPORT.lstrip('@'))],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:free':
+        await show_panel(q, '🎁 الماس رایگان\n\n'
+                         '👥 دعوت دوستان: با هر دعوت، ۵۰ الماس برای تو و ۵۰ الماس برای دوستت\n'
+                         '🎟 کد هدیه: اگه کد هدیه داری واردش کن\n'
+                         f'🎉 هدیهٔ شروع: {TRIAL_BONUS} الماس برای هر کاربر (بعد از عضویت کانال‌ها)',
+                         reply_markup=KB([[B('دعوت دوستان',callback_data='shop:invite',style='success')],[B('کد هدیه',callback_data='shop:code')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:on':
         if w['self_started']:
             await show_panel(q, 'سلفت از قبل روشنه. برای دیدن تنظیمات، دکمه‌ی اتصال اکانت یا دستور «پنل» رو استفاده کن.',reply_markup=KB([[B('🔗 اتصال اکانت',callback_data='self:conn')],[B('⏹ خاموش کردن',callback_data='shop:off')],[B('منوی اصلی',callback_data='shop:home')]])); return
@@ -694,11 +787,11 @@ async def callback(update,context):
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
         await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
     elif data=='shop:board': await show_panel(q, board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
-    elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
+    elif data=='shop:dash': await show_panel(q, f'👤 حساب کاربری\n🆔 آیدی: {uid}\n💎 موجودی: {w["balance"]} الماس\n🔌 وضعیت سلف: {"روشن" if w["self_started"] else "خاموش"}',reply_markup=KB([[B('داشبورد',callback_data='shop:board',style='success')],[B('خرید الماس',callback_data='shop:buy')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:about': await show_panel(q, 'سلف ابزاریه که از اکانت تلگرام خودت، طبق تنظیماتی که انجام می‌دی، کارهای خودکار انجام می‌ده. استفاده از اکانت شخصی ریسک محدودیت تلگرام رو داره. اگه نفهمیدی یا کمکی خواستی با پشتیبانی تماس بگیر: @escotch',reply_markup=KB([[B('پشتیبانی',url='https://t.me/escotch')],[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:help': await show_panel(q, 'برای شروع «ساخت سلف» و سپس «روشن کردن» رو بزن. بعد اتصال اکانت رو انجام بده و در چت‌های تلگرام خودت دستور «پنل» رو بنویس. پشتیبانی: @escotch',reply_markup=home_kb())
     elif data=='shop:buy':
-        n=_qty(context); await show_panel(q, buy_text(_pct(context), n), reply_markup=buy_kb(n))
+        n=_qty(context); await show_photo(q, context, 'buy', buy_text(_pct(context), n), buy_kb(n))
     elif data.startswith('shop:q:'):
         act=data.split(':')[2]; n=_qty(context); old_n=n
         if act=='noop': return
@@ -710,7 +803,7 @@ async def callback(update,context):
         n = min(MAX_QTY, n + QTY_STEP) if act=='add' else max(MIN_QTY, n - QTY_STEP)
         if n==old_n: return
         context.user_data['buy_n']=n
-        await show_panel(q, buy_text(_pct(context), n), reply_markup=buy_kb(n))
+        await show_photo(q, context, 'buy', buy_text(_pct(context), n), buy_kb(n))
     elif data=='shop:disc':
         context.user_data['gift_step']='disc'; await show_panel(q, '🏷 کد تخفیفت رو بفرست (مثل OFF-XXXXXX). برای لغو بنویس «لغو».')
     elif data.startswith('shop:pay:'):
@@ -1214,6 +1307,14 @@ def user_info_text(uid):
 async def incoming(update,context):
     m=update.effective_message; u=update.effective_user
     if not m or not u or update.effective_chat.type!='private': return
+    if m.text and m.text.strip() in MENU_TEXT:
+        for k_ in ('gift_step','tk_step','tk_id','transfer_step','transfer_target','payment_plan','sup_step','self_st'):
+            context.user_data.pop(k_, None)
+        if not await is_member(context.bot,u.id):
+            await m.reply_text('برای استفاده از ربات، اول عضو هر دو کانال شو و بعد «عضو شدم» رو بزن.',reply_markup=join_kb())
+        else:
+            await callback(update, context, _q=_Shim(u, m), _data=MENU_DATA[MENU_TEXT[m.text.strip()]])
+        raise ApplicationHandlerStop
     sst=context.user_data.get('sup_step') or ''
     if sst.startswith('treply:') and is_staff(u.id):
         if m.text and m.text.strip()=='لغو':
@@ -1330,11 +1431,11 @@ async def incoming(update,context):
         t=selfbot.fa2en(m.text).strip()
         if t=='لغو':
             context.user_data.pop('gift_step',None); n=_qty(context)
-            await m.reply_text(buy_text(_pct(context), n),reply_markup=buy_kb(n)); return
+            await _buy_screen(context.bot, m.chat_id, context, n); return
         if not t.isdigit() or not MIN_QTY<=int(t)<=MAX_QTY:
             await m.reply_text(f'❗️ یه عدد بین {MIN_QTY} تا {MAX_QTY} بفرست (یا «لغو»).'); return
         n=int(t); context.user_data['buy_n']=n; context.user_data.pop('gift_step',None)
-        await m.reply_text(buy_text(_pct(context), n),reply_markup=buy_kb(n)); return
+        await _buy_screen(context.bot, m.chat_id, context, n); return
     if gs=='disc' and m.text:
         t=m.text.strip()
         if t=='لغو':
@@ -1342,7 +1443,7 @@ async def incoming(update,context):
         res,pc=check_discount(u.id,t)
         if res=='ok':
             context.user_data.pop('gift_step',None); context.user_data['disc']={'code':t.upper(),'pct':pc}
-            await m.reply_text(f'✅ کد تخفیف {pc}٪ اعمال شد!\n\n'+buy_text(pc,_qty(context)),reply_markup=buy_kb(_qty(context))); return
+            await m.reply_text(f'✅ کد تخفیف {pc}٪ اعمال شد!'); await _buy_screen(context.bot, m.chat_id, context, _qty(context)); return
         msgs={'invalid':'❌ کد معتبر نیست؛ دوباره بفرست یا «لغو» بنویس.','expired':'⌛ این کد تخفیف منقضی شده.','finished':'😕 ظرفیت این کد تموم شده.','already':'ℹ️ این کد رو قبلاً استفاده کردی.'}
         if res!='invalid': context.user_data.pop('gift_step',None)
         await m.reply_text(msgs.get(res,'❌ کد معتبر نیست.')); return
