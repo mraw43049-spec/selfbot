@@ -22,6 +22,7 @@ import commerce
 import premium_emoji
 import pemoji
 import dicegame
+import dbtransfer
 from database import init_db
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s", level=logging.INFO)
@@ -77,6 +78,7 @@ def main():
             selfbot.SUPPORT_IDS.add(int(x))
     commerce.setup(app)
     dicegame.register(app)   # بازی شانسی دو نفره با الماس («بازی 20» توی گروه)
+    dbtransfer.register(app, ADMIN_IDS)   # /backup و /restore فقط برای مالک
     pemoji.install(app)      # ایموجی پرمیوم روی دکمه‌ها (باید بعد از commerce.setup باشه)
     logger.info("selfbot standalone started")
     app.run_polling(allowed_updates=["message", "callback_query", "inline_query", "chosen_inline_result"], drop_pending_updates=True)
