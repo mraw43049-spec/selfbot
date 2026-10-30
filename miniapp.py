@@ -202,7 +202,7 @@ def _resp(code, body, ctype="application/json; charset=utf-8", cache="no-store")
     return head.encode() + b
 
 
-BOARD_FILE = "snakes_board.jpg"      # عکس تخته؛ کنار miniapp.py توی ریشهٔ ریپو
+BOARD_FILE = "snakes_board.webp"     # عکس تخته؛ کنار miniapp.py توی ریشهٔ ریپو
 _board_cache = [None]
 
 
@@ -234,11 +234,11 @@ async def _route(method, path, headers, body):
         return _resp(200, {"ok": True})
     if path in ("/", "/app"):
         return _resp(200, _page(), "text/html; charset=utf-8")
-    if path == "/board.jpg":
+    if path == "/board.webp":
         b = _board_bytes()
         if not b:
             return _resp(404, {"error": "not_found"})
-        return _resp(200, b, "image/jpeg", cache="public, max-age=86400")
+        return _resp(200, b, "image/webp", cache="public, max-age=86400")
     if path in ("/api/me", "/api/toggle", "/api/snk/state", "/api/snk/roll",
                 "/api/self/state", "/api/self/act", "/api/self/dialogs"):
         if method != "POST":
@@ -451,23 +451,11 @@ button:disabled{opacity:.55}
 @keyframes gp{0%,100%{box-shadow:0 6px 20px rgba(124,92,255,.35)}50%{box-shadow:0 0 0 5px rgba(25,211,255,.25),0 6px 28px rgba(25,211,255,.6)}}
 body.ing .toast{bottom:calc(150px + env(safe-area-inset-bottom))}
 
-/* ---- تخته (مربع‌های واقعی؛ شماره داخل هر خونه؛ مار و نردبان با SVG روی همون جدول) ---- */
-.ban{aspect-ratio:820/218;background:#1d2733 url(/board.jpg) top center/100% auto no-repeat;border-radius:16px 16px 0 0;max-width:520px;margin:12px auto 0}
-.bwrap{max-width:520px;margin:0 auto;padding:9px 9px 6px;background:linear-gradient(180deg,#7a4d28,#5a3818 55%,#6f4623);border-radius:0 0 16px 16px;box-shadow:0 10px 30px rgba(0,0,0,.5),inset 0 0 0 2px rgba(255,210,140,.18);direction:ltr}
-.bw{position:relative;width:100%;aspect-ratio:1;container-type:inline-size;border-radius:6px;box-shadow:0 0 0 3px #3a230e,0 0 0 4px rgba(255,200,120,.35)}
-.cg{position:absolute;inset:0;display:grid;grid-template-columns:repeat(10,1fr);grid-template-rows:repeat(10,1fr);border-radius:4px;overflow:hidden}
-.cl{position:relative;border:.5px solid rgba(0,0,0,.18)}
-.cl.lt{background:linear-gradient(135deg,#f7ecd2,#e2d1aa)}.cl.dk2{background:linear-gradient(135deg,#2d3a49,#1a2430)}
-.cl.hs::before,.cl.ld::before,.cl.fin::before{content:"";position:absolute;inset:0}
-.cl.hs::before{background:rgba(255,70,70,.2)}.cl.ld::before{background:rgba(50,220,120,.22)}
-.cl.fin::before{background:linear-gradient(135deg,rgba(255,215,64,.75),rgba(255,160,0,.55))}
-.nm{pointer-events:none;z-index:3}
-.nm b{position:absolute;top:2px;left:2px;font:800 clamp(8px,2.7vw,12.5px)/1 system-ui,sans-serif;color:#fff;background:rgba(10,14,30,.62);padding:1.5px 3.5px;border-radius:4px;letter-spacing:.2px}
-.nm b.h{background:rgba(214,45,45,.92)}.nm b.l{background:rgba(30,150,80,.94)}.nm b.f{background:#d99a00;color:#fff}
-.art{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:2}
+/* ---- تخته: خود عکس (شماره‌ها و مارها توش‌ان) + فقط مهره‌ها روش ---- */
+.bw{position:relative;width:100%;max-width:520px;margin:12px auto 0;aspect-ratio:2/3;container-type:inline-size;border-radius:14px;overflow:hidden;background:#1d2733;direction:ltr;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.bw img{display:block;width:100%;height:100%}
 .tkl{position:absolute;inset:0;pointer-events:none;z-index:5}
-.stp{display:flex;justify-content:flex-end;align-items:center;height:30px;margin-top:5px;color:#ffd9a0;font:800 12px system-ui,sans-serif;letter-spacing:2px;text-shadow:0 1px 2px rgba(0,0,0,.6)}
-.tok{position:absolute;width:22px;height:22px;width:5.7cqw;height:5.7cqw;transform:translate(-50%,-50%);border-radius:50%;border:2.5px solid #fff;
+.tok{position:absolute;width:20px;height:20px;width:5.2cqw;height:5.2cqw;transform:translate(-50%,-50%);border-radius:50%;border:2.5px solid #fff;
  background-image:radial-gradient(circle at 32% 26%,rgba(255,255,255,.6),transparent 55%);
  box-shadow:0 3px 8px rgba(0,0,0,.7);transition:left .2s ease-out,top .2s ease-out,opacity .3s;z-index:3}
 .tok.step{animation:thop .17s ease-out}
@@ -483,7 +471,7 @@ body.ing .toast{bottom:calc(150px + env(safe-area-inset-bottom))}
 .tabs a.on{color:var(--btn);font-weight:700}
 body.ing .tabs{display:none}
 .gc{background:var(--card);border-radius:18px;overflow:hidden;margin-top:4px}
-.gimg{height:150px;background:#1d2733 url(/board.jpg) top center/100% auto no-repeat}
+.gimg{height:150px;background:#1d2733 url(/board.webp) top center/100% auto no-repeat}
 .gb{padding:14px}
 .gb h3{margin:0 0 6px;font-size:17px}
 .gb p{margin:0;color:var(--hint);font-size:13px;line-height:1.8}
@@ -910,13 +898,12 @@ const COLORS=["#e5484d","#2e9e5b","#2481cc","#f5a524"];
 const GE={not_player:"تو توی این بازی نیستی.",no_game:"این بازی فعال نیست.",not_your_turn:"نوبت تو نیست.",rate:"کمی صبر کن."};
 let GID=null,GS=null,SIG="",LSEQ=-1,LEFT=0,LAT=0,PT=null,RB=false,FIRST=true,STOPAT=0,PRAC=false,PG=null,PON=false;
 let TKE={},DISP={},Q=Promise.resolve();
-/* شماره‌گذاری زیگزاگ (مثل تختهٔ واقعی): ردیف پایین از چپ به راست، ردیف بعدی برعکس، ... تا ۱۰۰ بالا. [ستون، ردیف از بالا] */
-function cellRC(n){const r=Math.floor((n-1)/10),i=(n-1)%10;return [r%2===0?i:9-i,9-r]}
-function cc(n){const p=cellRC(n);return [p[0]*10+5,p[1]*10+5]}
+/* خونه‌ها روی خود عکس: ۱۰ ستون × ۱۰ ردیف؛ ردیف یازدهم (پایین) خونهٔ «شروع»ه. مختصات به پیکسلِ عکس اصلی ۱۰۲۴×۱۵۳۶ */
+const GX=[162,232,302,375,448,518,598,672,754,836,918],GY=[270,356,443,534,631,730,834,939,1045,1154,1265,1370];
 function tokPos(n,idx){
- if(n<=0)return [4+(idx%4)*6,105.5];
- const p=cellRC(n),dx=[-2,2,-2,2][idx%4],dy=[-1.6,-1.6,1.9,1.9][idx%4];
- return [p[0]*10+5+dx,p[1]*10+5.6+dy]}
+ if(n<=0){const c=idx%4;return [(GX[c]+GX[c+1])/20.48,(GY[10]+GY[11])/30.72]}
+ const c=(n-1)%10,r=9-Math.floor((n-1)/10),dx=[-1.5,1.5,-1.5,1.5][idx%4],dy=[-1.1,-1.1,1.2,1.2][idx%4];
+ return [(GX[c]+GX[c+1])/20.48+dx,(GY[r]+GY[r+1])/30.72+dy]}
 function setTok(p,n,jump,step){
  let e=TKE[p.id];
  if(!e){e=document.createElement("div");e.className="tok";e.style.backgroundColor=COLORS[p.idx%4];$("tkl").appendChild(e);TKE[p.id]=e}
@@ -924,47 +911,10 @@ function setTok(p,n,jump,step){
  e.classList.toggle("jump",!!jump);
  if(step){e.classList.remove("step");void e.offsetWidth;e.classList.add("step")}
  const xy=tokPos(n,p.idx);e.style.left=xy[0]+"%";e.style.top=xy[1]+"%";e.style.opacity=p.out?".35":"1";DISP[p.id]=n}
-const SNKPAL=[["#2fbf4a","#1c7a2e","#9cf08f"],["#e0443c","#8c1d18","#ff9b8f"],["#3d7dff","#1d3f99","#9fc3ff"],["#a54bd6","#5e1f85","#e1a8ff"],["#ff9a1f","#a55a00","#ffd493"],["#1fb5b0","#0d6764","#8ff0eb"],["#e8c21a","#8a6f00","#fff0a0"]];
-const f1=x=>Math.round(x*100)/100;
-function ladderSVG(a0,b0){
- const a=cc(a0),b=cc(b0),dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy),ux=dx/L,uy=dy/L,px=-uy*1.35,py=ux*1.35;
- const ln=(x1,y1,x2,y2,c,w,o)=>`<line x1="${f1(x1)}" y1="${f1(y1)}" x2="${f1(x2)}" y2="${f1(y2)}" stroke="${c}" stroke-width="${w}" stroke-linecap="round"${o?` opacity="${o}"`:""}/>`;
- let s="";const n=Math.max(2,Math.floor(L/3.3));
- s+=ln(a[0]+px+.5,a[1]+py+.7,b[0]+px+.5,b[1]+py+.7,"#000",1.3,.3)+ln(a[0]-px+.5,a[1]-py+.7,b[0]-px+.5,b[1]-py+.7,"#000",1.3,.3);
- for(let i=1;i<n;i++){const t=i/n,x=a[0]+dx*t,y=a[1]+dy*t;s+=ln(x+px,y+py,x-px,y-py,"#8a5324",1.05)+ln(x+px,y+py-.2,x-px,y-py-.2,"#d9a05b",.4)}
- s+=ln(a[0]+px,a[1]+py,b[0]+px,b[1]+py,"#6b3d14",1.35)+ln(a[0]-px,a[1]-py,b[0]-px,b[1]-py,"#6b3d14",1.35);
- s+=ln(a[0]+px,a[1]+py,b[0]+px,b[1]+py,"#c98a45",.5)+ln(a[0]-px,a[1]-py,b[0]-px,b[1]-py,"#c98a45",.5);
- return s}
-function snakeSVG(h,t,idx){
- const a=cc(h),b=cc(t),dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy),px=-dy/L,py=dx/L,C=SNKPAL[idx%SNKPAL.length];
- const N=40,A=Math.min(3.4,1.5+L/26),W=Math.max(1.5,L/15),P=[];
- for(let i=0;i<=N;i++){const s=i/N,o=A*Math.sin(Math.PI*s)*Math.sin(2*Math.PI*W*s);P.push([a[0]+dx*s+px*o,a[1]+dy*s+py*o])}
- const wd=s=>s<.65?3.1:3.1*(1-(s-.65)/.35*.72)+.4;
- let o="",f="";
- for(let i=0;i<N;i++){const s=i/N,w=wd(s);
-  o+=`<line x1="${f1(P[i][0])}" y1="${f1(P[i][1])}" x2="${f1(P[i+1][0])}" y2="${f1(P[i+1][1])}" stroke="${C[1]}" stroke-width="${f1(w+.9)}" stroke-linecap="round"/>`;
-  f+=`<line x1="${f1(P[i][0])}" y1="${f1(P[i][1])}" x2="${f1(P[i+1][0])}" y2="${f1(P[i+1][1])}" stroke="${Math.floor(i/2)%2?C[2]:C[0]}" stroke-width="${f1(w)}" stroke-linecap="round"/>`}
- const hx=P[0][0]-P[2][0],hy=P[0][1]-P[2][1],ang=Math.atan2(hy,hx)*180/Math.PI;
- const head=`<g transform="translate(${f1(P[0][0])} ${f1(P[0][1])}) rotate(${f1(ang)})"><path d="M2.6 0 L5 -.9 M2.6 0 L5 .9 M2.6 0 L4.2 0" stroke="#ff2b4a" stroke-width=".5" stroke-linecap="round" fill="none"/>
- <ellipse cx="0" cy="0" rx="3.5" ry="2.7" fill="${C[0]}" stroke="${C[1]}" stroke-width=".6"/><ellipse cx="-.4" cy="-.7" rx="2" ry="1" fill="${C[2]}" opacity=".55"/>
- <circle cx="1.1" cy="-1.3" r=".85" fill="#fff"/><circle cx="1.1" cy="1.3" r=".85" fill="#fff"/><circle cx="1.35" cy="-1.3" r=".42" fill="#111"/><circle cx="1.35" cy="1.3" r=".42" fill="#111"/></g>`;
- return o+f+head}
-function artSVG(){
- let s='<defs><filter id="ds" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx=".4" dy=".8" stdDeviation=".55" flood-color="#000" flood-opacity=".55"/></filter></defs><g filter="url(#ds)">';
- Object.keys(SNK.ladders).forEach(k=>{s+=ladderSVG(+k,SNK.ladders[k])});
- let i=0;Object.keys(SNK.snakes).forEach(k=>{s+=snakeSVG(+k,SNK.snakes[k],i++)});
- return s+"</g>"}
 function shell(){
- let c="",nm="";
- for(let rt=0;rt<10;rt++)for(let col=0;col<10;col++){const r=9-rt,i=r%2===0?col:9-col,n=r*10+i+1;
-  const k=SNK.snakes[n]?"hs":SNK.ladders[n]?"ld":n===100?"fin":"";
-  c+=`<div class="cl ${(rt+col)%2?"dk2":"lt"} ${k}"></div>`;
-  nm+=`<div style="position:relative"><b class="${k==="hs"?"h":k==="ld"?"l":k==="fin"?"f":""}">${n===100?"👑 100":n}</b></div>`}
  $("g").innerHTML=`<div class="gbar"><button class="alt sm" id="gback">‹ بازگشت</button><button class="alt sm" id="gsnd">${SFX.on?"🔊 صدا":"🔇 بی‌صدا"}</button></div>
  <div id="gtop"></div>
- <div class="ban"></div>
- <div class="bwrap"><div class="bw" id="bw"><div class="cg">${c}</div><svg class="art" viewBox="0 0 100 100">${artSVG()}</svg><div class="cg nm">${nm}</div><div class="tkl" id="tkl"></div></div>
- <div class="stp">🚩 START</div></div>
+ <div class="bw" id="bw"><img src="/board.webp" alt="" decoding="async"><div class="tkl" id="tkl"></div></div>
  <div class="lg" id="glog"></div>
  <div class="dkw" id="gdock"><div class="dk"><div class="dice3" id="dc">${diceHTML()}</div><div class="dkr"><div class="dkt" id="dkt"></div><button id="rb">🎲 تاس بنداز</button></div></div></div>`;
  $("gback").onclick=()=>{stopGame();showTab(VIEW==="dash"?"games":VIEW);reloadDash()};

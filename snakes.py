@@ -41,10 +41,11 @@ TAX = Decimal("0.05")
 KEEP_DONE = 1800        # بازی تمام‌شده این‌قدر ثانیه توی حافظه می‌مونه تا نتیجه‌اش دیده بشه
 ORPHAN_AGE = 150        # بازیِ ذخیره‌شده‌ای که این‌قدر آپدیت نشده و توی حافظه نیست = یتیم → لغو + برگشت شرط
 BOARD = 100
-# تخته مطابق عکس snakes_board.jpg؛ شماره‌گذاری ردیف‌به‌ردیف از پایین-چپ (۱) تا بالا-راست (۱۰۰).
-# هر مار/نردبان با جای واقعی‌اش روی عکس هماهنگ شده (سر مار و پایین نردبان = کلید، دم مار و بالای نردبان = مقدار).
-SNAKES = {93: 74, 97: 68, 63: 43, 67: 47, 49: 39, 32: 22, 18: 8}
-LADDERS = {61: 72, 79: 89, 50: 60, 35: 56, 13: 34, 19: 39}
+# تخته مطابق عکس snakes_board.webp؛ ردیف پایین عکس «شروع» (بدون شماره) و ردیف بالاش خونه‌های ۱ تا ۱۰ه؛
+# شماره‌گذاری ردیف‌به‌ردیف از چپ به راست تا ۱۰۰ بالا-راست. هر مار/نردبان با جای واقعی‌اش روی عکس هماهنگ شده
+# (سر مار و پایین نردبان = کلید، دم مار و بالای نردبان = مقدار). مار آبی‌سبز دمش توی ردیف شروعه (۰ = برگشت به شروع).
+SNAKES = {93: 64, 88: 58, 53: 33, 57: 47, 38: 29, 22: 12, 8: 0}
+LADDERS = {51: 72, 69: 89, 39: 60, 25: 46, 3: 24, 9: 29}
 
 _PAT = re.compile(r"^\s*مار[\s\u200c]*و[\s\u200c]*پله(?:[\s\u200c]+([0-9۰-۹٠-٩,٬،]+))?\s*$")
 _DIG = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -343,6 +344,7 @@ async def cmd_new(update, context):
             await m.reply_text("❌ خطای داخلی؛ دوباره امتحان کن.")
             return
         GAMES[g["id"]] = g
+        await _send_board(m)
         try:
             sent = await m.reply_text(_text(g), parse_mode="HTML", reply_markup=_kb(g))
             g["msg"] = sent.message_id
@@ -351,6 +353,29 @@ async def cmd_new(update, context):
             logger.exception("snakes: lobby message failed")
             del GAMES[g["id"]]
             _cancel(g, "send failed")
+
+
+CHAT_IMG = "snakes_chat.jpg"        # عکس تخته برای گپ (JPEG چون تلگرام WebP رو به‌عنوان عکس قبول نمی‌کنه)
+_PHOTO = [None]                     # بعد از اولین ارسال، file_id تلگرام نگه داشته می‌شه تا دوباره آپلود نشه
+
+
+async def _send_board(m):
+    """عکس تخته (همون عکس مینی‌اپ) رو قبل از پیام بازی توی گپ می‌فرسته؛ خطاش هیچ‌وقت بازی رو خراب نمی‌کنه."""
+    for _ in range(2):
+        try:
+            src = _PHOTO[0]
+            if src is None:
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), CHAT_IMG), "rb") as f:
+                    src = f.read()
+            sent = await m.reply_photo(src)
+            if sent.photo:
+                _PHOTO[0] = sent.photo[-1].file_id
+            return
+        except Exception:
+            if _PHOTO[0] is None:
+                logger.warning("snakes: sending board photo failed", exc_info=True)
+                return
+            _PHOTO[0] = None       # file_id قدیمی/نامعتبر؛ یک بار از روی فایل دوباره امتحان کن
 
 
 # ---------- دکمه‌ها ----------
