@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-مینی‌اپ تلگرام: داشبورد کاربر (الماس، وضعیت سلف، روشن/خاموش) + تب بازی‌ها (مار و پله) + تب سلف.
+مینی‌اپ تلگرام: داشبورد کاربر (الماس، وضعیت سلف، روشن/خاموش) + تب بازی‌ها (مار و پله) + تب سلف (پنل کامل سلف با کلید روشن/خاموش برای همهٔ امکانات؛ منطقش توی selfpanel.py).
 
 - بدون وابستگی جدید (فقط stdlib)؛ یک سرور HTTP سبک توی همین پروسهٔ ربات بالا میاد و روی PORT گوش می‌ده.
 - احراز هویت: initData تلگرام با HMAC و BOT_TOKEN چک می‌شه؛ آیدی کاربر فقط از همون خونده می‌شه (نه از ورودی کاربر).
@@ -239,7 +239,8 @@ async def _route(method, path, headers, body):
         if not b:
             return _resp(404, {"error": "not_found"})
         return _resp(200, b, "image/jpeg", cache="public, max-age=86400")
-    if path in ("/api/me", "/api/toggle", "/api/snk/state", "/api/snk/roll"):
+    if path in ("/api/me", "/api/toggle", "/api/snk/state", "/api/snk/roll",
+                "/api/self/state", "/api/self/act", "/api/self/dialogs"):
         if method != "POST":
             return _resp(405, {"error": "method"})
         auth = headers.get("authorization", "")
@@ -248,6 +249,22 @@ async def _route(method, path, headers, body):
         if not user:
             return _resp(401, {"error": "auth"})
         uid = user["id"]
+        if path.startswith("/api/self/"):
+            # پنل کامل سلف (selfpanel.py)؛ uid فقط از initData امضاشده میاد
+            if _limited(uid, 150, 60, "self") or (path.endswith("/dialogs") and _limited(uid, 25, 60, "selfdl")):
+                return _resp(403, {"error": "rate"})
+            try:
+                data = json.loads(body.decode() or "{}")
+                if not isinstance(data, dict):
+                    raise ValueError
+            except Exception:
+                return _resp(400, {"error": "bad_request"})
+            import selfpanel
+            if path == "/api/self/state":
+                return _resp(200, selfpanel.state(uid))
+            if path == "/api/self/dialogs":
+                return _resp(200, await selfpanel.dialogs(uid, str(data.get("kind") or "slot"), str(data.get("q") or "")[:40]))
+            return _resp(200, await selfpanel.act(uid, data))
         if path.startswith("/api/snk/"):
             if _limited(uid, 200, 60, "snk"):
                 return _resp(403, {"error": "rate"})
@@ -436,17 +453,108 @@ body.ing .tabs{display:none}
 .gb p{margin:0;color:var(--hint);font-size:13px;line-height:1.8}
 ul.rl{margin:10px 0 0;padding:0 18px 0 0;font-size:13px;line-height:1.9;color:var(--tx)}
 .soon{opacity:.6}
+
+/* ================= تم نئونی + پنل سلف ================= */
+:root{--bg:#090d1b;--tx:#eef1ff;--hint:#8d96b8;--card:#121933;--card2:#182142;--btn:#7c5cff;--btx:#fff;--ok:#27d98a;--bad:#ff4d6d;
+--ac1:#7c5cff;--ac2:#19d3ff;--line:rgba(255,255,255,.07)}
+body{background:radial-gradient(900px 420px at 85% -80px,rgba(124,92,255,.28),transparent 70%),radial-gradient(700px 380px at -10% 12%,rgba(25,211,255,.14),transparent 70%),var(--bg);background-attachment:fixed}
+.hero,.c,.row,.gc,.top,.pl,.msg{border:1px solid var(--line)}
+button{background:linear-gradient(135deg,var(--ac1),var(--ac2));box-shadow:0 6px 20px rgba(124,92,255,.28);transition:transform .12s,filter .2s}
+button:active{transform:scale(.97)}
+button.red{background:linear-gradient(135deg,#ff4d6d,#ff8a5c);box-shadow:0 6px 20px rgba(255,77,109,.28)}
+button.alt{background:var(--card2);box-shadow:none;border:1px solid var(--line)}
+.tabs{background:rgba(14,19,40,.92);backdrop-filter:blur(14px);border-top:1px solid var(--line)}
+.tabs a.on{color:var(--ac2);text-shadow:0 0 12px rgba(25,211,255,.55)}
+
+.shero{position:relative;overflow:hidden;border-radius:22px;padding:18px 16px 16px;text-align:center;border:1px solid var(--line);
+background:linear-gradient(160deg,rgba(124,92,255,.22),rgba(25,211,255,.08) 60%,rgba(18,25,51,.9))}
+.ring{position:relative;width:96px;height:96px;margin:2px auto 10px;border-radius:50%;display:grid;place-items:center;font-size:40px}
+.ring::before{content:"";position:absolute;inset:0;border-radius:50%;padding:3px;
+background:conic-gradient(from 0deg,var(--ac1),var(--ac2),var(--ac1));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+-webkit-mask-composite:xor;mask-composite:exclude;opacity:.25}
+.ring.on::before{opacity:1;animation:spin 3.2s linear infinite}
+.ring.on{box-shadow:0 0 34px rgba(124,92,255,.55),inset 0 0 22px rgba(25,211,255,.18);animation:pulse 2.6s ease-in-out infinite}
+.ring i{font-style:normal;filter:drop-shadow(0 0 10px rgba(25,211,255,.6))}
+.ring:not(.on) i{filter:grayscale(1);opacity:.55}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{50%{box-shadow:0 0 52px rgba(25,211,255,.55),inset 0 0 26px rgba(124,92,255,.25)}}
+.shero h2{margin:0;font-size:20px}
+.shero p{margin:4px 0 0;color:var(--hint);font-size:12.5px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:12px}
+.chip{padding:5px 11px;border-radius:99px;font-size:12px;background:rgba(255,255,255,.07);border:1px solid var(--line)}
+.chip.g{color:var(--ok);background:rgba(39,217,138,.12)}.chip.r{color:var(--bad);background:rgba(255,77,109,.12)}.chip.y{color:#ffd24d;background:rgba(255,210,77,.1)}
+.sbtns{display:flex;gap:8px;margin-top:12px}.sbtns button{margin:0;padding:11px;font-size:14px}
+
+.ac{background:var(--card);border:1px solid var(--line);border-radius:18px;margin-top:10px;overflow:hidden}
+.ach{display:flex;align-items:center;gap:10px;padding:13px 14px;cursor:pointer;user-select:none}
+.ach .ic{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;font-size:19px;background:linear-gradient(135deg,rgba(124,92,255,.35),rgba(25,211,255,.2));flex:none}
+.ach b{flex:1;font-size:15px}.ach small{color:var(--hint);font-size:11.5px;display:block;font-weight:400;margin-top:2px}
+.ach .bd{font-size:11px;padding:3px 9px;border-radius:99px;background:rgba(255,255,255,.08);color:var(--hint)}
+.ach .bd.on{background:rgba(39,217,138,.16);color:var(--ok)}
+.ach .cv{color:var(--hint);transition:transform .25s;font-size:14px}.ac.open .cv{transform:rotate(-90deg)}
+.acb{display:none;padding:2px 12px 14px}.ac.open .acb{display:block;animation:fd .25s}
+@keyframes fd{from{opacity:0;transform:translateY(-4px)}}
+.sr{display:flex;align-items:center;gap:10px;padding:11px 4px;border-top:1px solid var(--line);cursor:pointer}
+.acb>.sr:first-child{border-top:0}
+.sr .t{flex:1;font-size:14px}.sr .t small{display:block;color:var(--hint);font-size:11.5px;margin-top:2px;line-height:1.6}
+.sw{position:relative;width:48px;height:28px;border-radius:99px;background:#2a3355;flex:none;transition:background .25s,box-shadow .25s}
+.sw::after{content:"";position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:right .25s;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.sw.on{background:linear-gradient(135deg,var(--ac1),var(--ac2));box-shadow:0 0 16px rgba(124,92,255,.65)}.sw.on::after{right:23px}
+.sw.dg.on{background:linear-gradient(135deg,#ff4d6d,#ff8a5c);box-shadow:0 0 16px rgba(255,77,109,.6)}
+.mini{display:inline-block;padding:8px 13px;border-radius:12px;font-size:13px;background:var(--card2);border:1px solid var(--line);color:var(--tx);cursor:pointer;margin:4px 0 0 6px}
+.mini.p{background:linear-gradient(135deg,var(--ac1),var(--ac2));border:0;color:#fff}.mini.d{color:var(--bad)}
+.fg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.fc{background:var(--card2);border:1px solid var(--line);border-radius:13px;padding:9px 8px;text-align:center;cursor:pointer;transition:.2s}
+.fc small{display:block;color:var(--hint);font-size:11px;margin-top:3px}.fc .sm1{font-size:16px;direction:ltr;word-break:break-all}
+.fc.on{border-color:var(--ac2);box-shadow:0 0 14px rgba(25,211,255,.3);background:linear-gradient(160deg,rgba(124,92,255,.22),var(--card2))}
+.f-u{text-decoration:underline}.f-s{text-decoration:line-through}.f-code{font-family:monospace}.f-b,.f-bi{font-weight:700}.f-i,.f-bi{font-style:italic}
+.f-spoiler{filter:blur(4px)}.f-quote{border-right:3px solid var(--ac2);padding-right:6px}
+.seg{display:flex;background:var(--card2);border-radius:12px;padding:3px;margin-top:8px;border:1px solid var(--line)}
+.seg a{flex:1;text-align:center;padding:8px 0;border-radius:9px;font-size:13px;color:var(--hint);cursor:pointer}
+.seg a.on{background:linear-gradient(135deg,var(--ac1),var(--ac2));color:#fff;font-weight:700}
+.slc{background:var(--card2);border:1px solid var(--line);border-radius:16px;padding:12px;margin-top:9px}
+.slc.rdy{border-color:rgba(39,217,138,.45);box-shadow:0 0 18px rgba(39,217,138,.12)}
+.slh{display:flex;align-items:center;gap:8px;font-size:15px}.slh b{flex:1}
+.slh .n{width:26px;height:26px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,var(--ac1),var(--ac2));font-size:13px;font-weight:700}
+.slg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
+.slg div{background:rgba(255,255,255,.05);border-radius:11px;padding:8px 10px;font-size:12.5px;cursor:pointer;line-height:1.6}
+.slg div small{display:block;color:var(--hint);font-size:11px}.slg div.no{outline:1px dashed rgba(255,210,77,.55)}
+.hint{color:var(--hint);font-size:12px;line-height:1.8;margin:8px 2px 0}
+.tag{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:99px;background:var(--card2);border:1px solid var(--line);font-size:12.5px;margin:6px 0 0 6px;max-width:100%}
+.tag u{text-decoration:none;color:var(--bad);cursor:pointer;font-size:15px;line-height:1}
+.guide{padding:11px 4px;border-top:1px solid var(--line);cursor:pointer;font-size:14px}
+.acb>.guide:first-child{border-top:0}
+.gbody{display:none;margin-top:8px;color:var(--hint);font-size:12.5px;line-height:1.9;background:rgba(255,255,255,.04);border-radius:12px;padding:10px}
+.guide.open .gbody{display:block}.gbody code{direction:ltr;unicode-bidi:embed;background:rgba(124,92,255,.22);color:#cfd6ff;padding:1px 6px;border-radius:6px;font-size:12px}
+.gbody b{color:var(--tx)}
+
+.shw{position:fixed;inset:0;background:rgba(3,5,14,.65);backdrop-filter:blur(4px);z-index:20;display:none;align-items:flex-end}
+.shw.on{display:flex}
+.shb{width:100%;max-height:82vh;overflow:auto;background:var(--card);border-radius:24px 24px 0 0;padding:16px 16px calc(18px + env(safe-area-inset-bottom));border-top:1px solid var(--line);animation:up .28s ease-out}
+@keyframes up{from{transform:translateY(40px);opacity:0}}
+.shb h3{margin:0 0 10px;font-size:16px}
+.shb input,.shb textarea{width:100%;background:var(--card2);color:var(--tx);border:1px solid var(--line);border-radius:12px;padding:12px;font:inherit;font-size:15px;outline:0}
+.shb input:focus,.shb textarea:focus{border-color:var(--ac2)}.shb textarea{min-height:90px;resize:vertical}
+.opt{display:flex;align-items:center;gap:10px;padding:12px;border-radius:13px;background:var(--card2);border:1px solid var(--line);margin-top:7px;cursor:pointer;font-size:14px}
+.opt small{color:var(--hint);font-size:11.5px;margin-right:auto}.opt.on{border-color:var(--ac2)}
+.chipsel{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}.chipsel a{padding:9px 14px;border-radius:12px;background:var(--card2);border:1px solid var(--line);font-size:13px;cursor:pointer}
+.chipsel a.on{background:linear-gradient(135deg,var(--ac1),var(--ac2));border:0;color:#fff}
+.lk{opacity:.5;pointer-events:none}
+.shine{position:relative;overflow:hidden}
+.shine::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.28),transparent);animation:sh2 4.5s infinite}
+@keyframes sh2{0%,60%{left:-60%}100%{left:130%}}
 </style></head><body>
 <h1 id="ttl">📊 داشبورد</h1>
 <div id="v" class="skel"><div class="hero"><div class="n">…</div><div class="l">در حال بارگذاری</div></div></div>
 <div id="gl" style="display:none"></div>
 <div id="sf" style="display:none"></div>
 <div id="g" style="display:none"></div>
+<div class="shw" id="shw"><div class="shb" id="sh"></div></div>
 <div class="toast" id="toast"></div>
 <div class="tabs" id="tabs"><a data-t="dash" class="on"><i>📊</i>داشبورد</a><a data-t="games"><i>🎮</i>بازی‌ها</a><a data-t="self"><i>⚡</i>سلف</a></div>
 <script>
 const SNK=__SNK__;
-const tg=window.Telegram&&Telegram.WebApp;if(tg){tg.ready();tg.expand();}
+const tg=window.Telegram&&Telegram.WebApp;if(tg){tg.ready();tg.expand();try{tg.setHeaderColor("#090d1b");tg.setBackgroundColor("#090d1b");tg.setBottomBarColor&&tg.setBottomBarColor("#0e1328")}catch(e){}}
 const init=tg?tg.initData:"";
 const $=id=>document.getElementById(id);
 const fa=s=>String(s).replace(/\d/g,d=>"۰۱۲۳۴۵۶۷۸۹"[d]).replace(".","٫");
@@ -504,18 +612,181 @@ async function flip(){
  if(s.on&&tg&&tg.showConfirm){tg.showConfirm("سلف خاموش بشه؟",ok=>ok&&go())}else go();
 }
 
-/* ---------- تب سلف ---------- */
+/* ---------- تب سلف (پنل کامل) ---------- */
+let SP=null,SPON=null,SBUSY=false;const OPEN=new Set(["slots"]);
+const SE={not_allowed:"سلف برای حسابت فعال نیست.",not_connected:"اول اکانتت رو وصل کن.",need_target:"اول گپ تایپینگ رو انتخاب کن.",stale:"لیست قدیمی شده؛ دوباره باز کن.",tg_error:"تلگرام جواب نداد؛ دوباره امتحان کن.",bad_request:"ورودی نامعتبره.",server:"خطای سرور؛ کمی بعد دوباره امتحان کن.",rate:"کمی صبر کن.",banned_word:"⛔ این کلمه مجاز نیست.",feat_denied:"این قابلیت برای حسابت فعال نیست."};
+const TGD={
+ presence:[["ft","always_online","🟢","همیشه آنلاین","وضعیت آنلاین هر ۲ دقیقه تازه می‌شه"],
+           ["ft","typing_mode","⌨️","تایپینگ نمایشی","وقتی کسی تایپ می‌کنه، تو هم توی گپ انتخابی «در حال تایپ» نشون می‌دی"]],
+ pv:[["ft","pv_lock","🔒","قفل پیوی","پیام‌های ورودی پیوی خودکار پاک می‌شن","dg"],
+     ["ft","pv_join","📢","عضویت اجباری پیوی","طرف مقابل باید اول عضو کانال‌ها بشه"],
+     ["mt","ar_on","💬","پاسخ خودکار پیوی","به هر نفر حداکثر هر ۶ ساعت یک‌بار"],
+     ["mt","del_on","🗑","خبر حذف/ویرایش پیوی","پیام‌هایی که پاک یا ویرایش شدن بهت خبر داده می‌شه"],
+     ["mt","ttl_on","⏳","ذخیرهٔ مدیای تایمردار","عکس و ویدیوی خودتخریب‌شونده ذخیره می‌شه"]],
+ watch:[["mt","mn_on","📣","خبر منشن در گروه‌ها","هر بار منشن بشی بهت اطلاع می‌ده"]]
+};
+const sw=(kind,k,ic,ti,sub,on,cls)=>`<div class="sr" data-sw="${kind}:${k}"><span style="font-size:20px">${ic}</span><div class="t">${ti}<small>${sub||""}</small></div><span class="sw ${cls||""} ${on?"on":""}"></span></div>`;
+const swT=t=>sw(t[0],t[1],t[2],t[3],t[4],SP.toggles[t[1]],t[5]);
+const ac=(id,ic,ti,sub,bd,body)=>`<div class="ac ${OPEN.has(id)?"open":""}" data-id="${id}"><div class="ach"><span class="ic">${ic}</span><b>${ti}<small>${sub}</small></b>${bd}<span class="cv">‹</span></div><div class="acb">${body}</div></div>`;
+const bdg=(t,on)=>`<span class="bd ${on?"on":""}">${t}</span>`;
+const onoff=v=>bdg(v?"روشن":"خاموش",v);
+
+async function loadSP(){try{SP=await api("/api/self/state")}catch(e){if(!SP){const x=$("spx");if(x)x.innerHTML=`<div class="msg">${esc(e.message)}</div>`;return}}spRender()}
+
 function renderSelf(s,note){
- const warn=s.on&&!s.connected?`<div class="msg">اکانتت هنوز وصل نشده؛ از داخل ربات «ورود به اکانت» رو بزن.</div>`:"";
- $("sf").innerHTML=`
- <div class="hero"><div class="n">${s.on?"⚡ روشن":"⏹ خاموش"}</div>
- <div class="l">${s.on?"سلف فعاله؛ ساعتی "+fa(s.rate)+" الماس کسر می‌شه":"با روشن‌کردن، سلف اکانتت فعال می‌شه ("+fa(s.activate_cost)+" الماس)"}</div></div>
- <div class="row"><span>🔗 اتصال اکانت</span><span>${s.connected?"وصل ✅":"وصل نیست"}</span></div>
- <div class="row"><span>💎 موجودی</span><span>${fa(s.balance)}</span></div>
- <div class="row"><span>⏳ باقی‌مانده</span><span>${span(s.hours)}</span></div>
- ${warn}${toggleBtn(s)}
- <div class="msg">🎛 تنظیمات کامل سلف (فونت، پاسخ خودکار، ساعت، بازی‌ها و...) فعلاً از «.پنل» توی چت‌های تلگرامته.</div>
- ${noteBox(note)}`;bindTgl()}
+ $("sf").innerHTML=`<div class="shero shine"><div class="ring ${s.on?"on":""}"><i>⚡</i></div>
+ <h2>${s.on?"سلف روشنه":"سلف خاموشه"}</h2>
+ <p>${s.on?"ساعتی "+fa(s.rate)+" الماس کسر می‌شه":"با روشن‌کردن، همهٔ تنظیمات پایین باز می‌شن ("+fa(s.activate_cost)+" الماس)"}</p>
+ <div class="chips"><span class="chip ${s.connected?"g":"r"}">🔗 ${s.connected?"اکانت وصله":"اکانت وصل نیست"}</span><span class="chip">💎 ${fa(s.balance)}</span><span class="chip">⏳ ${span(s.hours)}</span></div>
+ ${toggleBtn(s)}</div><div id="spx"></div>${noteBox(note)}`;
+ bindTgl();
+ if(SP===null||SPON!==s.on){SPON=s.on;loadSP();if(s.on)setTimeout(loadSP,4000)}else spRender();
+}
+
+function spRender(){
+ const el=$("spx");if(!el)return;
+ if(!SP){el.innerHTML=`<div class="msg">در حال بارگذاری پنل…</div>`;return}
+ if(!SP.allowed){el.innerHTML=`<div class="msg">🔒 پنل سلف بعد از روشن‌شدن سلف باز می‌شه. اول با دکمهٔ بالا روشنش کن.</div>`;return}
+ const T=SP.toggles,sl=SP.slots,rd=sl.filter(x=>x.ready).length,H=[];
+ if(!SP.configured)H.push(`<div class="msg">⚠️ سلف هنوز روی سرور راه‌اندازی نشده (SELF_API_ID / SELF_API_HASH).</div>`);
+ else if(!SP.connected)H.push(`<div class="msg" style="border-color:rgba(255,210,77,.4)">🔌 اکانتت الان وصل نیست؛ تنظیمات ذخیره می‌شن ولی کار نمی‌کنن.<br><span class="mini p" data-do="conn" style="margin-top:8px">🔗 اتصال اکانت (داخل ربات)</span></div>`);
+ // اسلات‌ها
+ H.push(ac("slots","🎮","اسلات‌های بازی","کلمه + گپ + تایمر + دکمه؛ خودش می‌گه و می‌زنه",bdg(fa(rd)+"/"+fa(sl.length)+" آماده",rd>0),
+  sl.map(s=>`<div class="slc ${s.ready?"rdy":""}"><div class="slh"><span class="n">${fa(s.i+1)}</span><b>${s.word?esc(s.word):"اسلات خالی"}</b>${s.ready?'<span class="chip g">آماده ✅</span>':(s.word||s.has_chat)?'<span class="chip y">ناقص</span>':""}</div>
+  <div class="slg"><div class="${s.word?"":"no"}" data-do="slot:word:${s.i}">📝 کلمه<small>${s.word?esc(s.word):"تنظیم کن"}</small></div>
+  <div class="${s.has_chat?"":"no"}" data-do="slot:chat:${s.i}">💬 گپ<small>${s.has_chat?esc(s.title):"انتخاب کن"}</small></div>
+  <div class="${s.delay?"":"no"}" data-do="slot:delay:${s.i}">⏱ تایمر<small>${s.delay?"هر "+esc(fa(s.delay_txt)):"خاموش"}</small></div>
+  <div data-do="slot:pos:${s.i}">🎯 دکمه<small>${esc(SP.pos[s.pos]||"")}</small></div></div>
+  ${(s.word||s.has_chat)?`<span class="mini d" data-do="slot:clr:${s.i}">🗑 پاک‌کردن</span>`:""}</div>`).join("")
+  +`<div class="hint">تایمر حداقل ${fa(SP.min_auto)} ثانیه. وقتی هر چهار مورد پر باشه اسلات «آماده» می‌شه و خودکار کار می‌کنه.</div>`));
+ // ساعت
+ const cf=SP.clock.fonts;
+ H.push(ac("clock","🕒","ساعت زنده","ساعت کنار اسم پروفایلت، هر دقیقه تازه می‌شه",onoff(SP.clock.on),
+  `<div class="sr" data-do="clk"><span style="font-size:20px">🕒</span><div class="t">نمایش ساعت کنار اسم<small>اسم اصلیت موقع خاموش‌کردن برمی‌گرده</small></div><span class="sw ${SP.clock.on?"on":""}"></span></div>
+  <div class="fg">${cf.map(f=>`<div class="fc ${SP.clock.font===f.i&&SP.clock.on?"on":""}" data-do="clkf:${f.i}"><div class="sm1">${esc(f.sample)}</div><small>${esc(f.name)}</small></div>`).join("")}</div>`));
+ // متن
+ const X=SP.text;
+ H.push(ac("text","🔤","حالت متن","فونت پیام‌هایی که می‌فرستی + افکت تایپ",bdg(esc(X.mode)+(X.fx?" + تایپ":""),X.mode!=="ساده"||X.fx),
+  `<div class="fg">${X.fonts.map(f=>`<div class="fc ${f.n===X.mode?"on":""}" data-fn="${esc(f.n)}"><div class="sm1 ${f.tag?"f-"+f.tag:""}">${esc(f.s)}</div><small>${esc(f.n)}</small></div>`).join("")}</div>
+  <div style="height:8px"></div>${sw("do","tfx","⌨️","تایپ حرف‌به‌حرف","پیام‌های کوتاه با افکت تایپ ادیت می‌شن",X.fx)}
+  <div class="seg">${["1","2","3"].map(k=>`<a class="${String(X.speed)===k?"on":""}" data-do="tsp:${k}">${esc(X.speeds[k])}</a>`).join("")}</div>
+  <div class="hint">دستورهای نقطه‌دار (مثل .پنل) دست نمی‌خورن.</div>`));
+ // حضور
+ const ty=SP.typing;
+ H.push(ac("presence","🟢","حضور و تایپینگ","آنلاین بودن و تایپ نمایشی",onoff(T.always_online||T.typing_mode),
+  TGD.presence.map(swT).join("")
+  +`<div class="sr" style="cursor:default"><span style="font-size:20px">🎯</span><div class="t">گپ تایپینگ<small>${ty.has_target?esc(ty.target):"هنوز انتخاب نشده"}</small></div></div>
+  <span class="mini p" data-do="typing">${ty.has_target?"تغییر گپ":"انتخاب گپ"}</span>${ty.has_target?`<span class="mini d" data-do="typclr">حذف مقصد</span>`:""}`));
+ // پیوی
+ H.push(ac("pv","🛡","پیوی و پاسخ خودکار","قفل، عضویت اجباری، پاسخ خودکار و اعلان‌ها",onoff(T.pv_lock||T.pv_join||T.ar_on),
+  TGD.pv.map(swT).join("")
+  +`<div class="hint" style="white-space:pre-wrap">متن پاسخ خودکار:\n${esc(SP.ar_text)}</div><span class="mini p" data-do="artext">✏️ ویرایش متن</span>`));
+ // نظارت
+ H.push(ac("watch","👀","نظارت و سکوت","منشن‌گیر، ناظر کلمه/آیدی، سکوت پیوی",onoff(T.mn_on||T.wl_on||T.mu_on),
+  TGD.watch.map(swT).join("")
+  +sw("mt","wl_on","🔎","ناظر کلمه/آیدی ("+fa(SP.wl.length)+")","هر جا دیده بشن بهت خبر می‌ده",T.wl_on)
+  +`<div>${SP.wl.map((x,i)=>`<span class="tag">${esc(x)}<u data-do="wldel:${i}">×</u></span>`).join("")}</div>${SP.wl.length<SP.wl_max?`<span class="mini p" data-do="wladd">➕ افزودن مورد</span>`:""}
+  `+sw("mt","mu_on","🔇","سکوت پیوی ("+fa(SP.mu.length)+" نفر)","پیام‌های جدیدشون توی پیوی از سمت تو پاک می‌شه",T.mu_on)
+  +`<div>${SP.mu.map(x=>`<span class="tag">${esc(x.name)}<u data-do="mudel:${esc(x.id)}">×</u></span>`).join("")}</div>${SP.mu.length<SP.mu_max?`<span class="mini p" data-do="muadd">➕ افزودن کاربر</span>`:""}`));
+ // دوست/دشمن
+ const M=SP.modes,mrow=(m,ic,ti)=>sw("mode",m,ic,ti,M[m].n?fa(M[m].n)+" نفر: "+esc(M[m].names.join("، ")):"کسی اضافه نشده",M[m].on,m==="enemy"?"dg":"")+(M[m].n?`<span class="mini d" data-do="mode:clr:${m}">🗑 پاک‌کردن افراد ${ti.replace("حالت ","")}</span>`:"");
+ H.push(ac("modes","💕","حالت دوست / دشمن","جواب چرخشی خودکار به افراد انتخابی",onoff(M.friend.on||M.enemy.on),
+  mrow("friend","💕","حالت دوست")+mrow("enemy","😈","حالت دشمن")
+  +`<div class="hint">برای افزودن آدم: توی چت روی پیامش ریپلای کن و بنویس <b>.افزودن دوست</b> یا <b>.افزودن دشمن</b> (حداکثر ${fa(M.friend.max)} نفر).</div>`));
+ // کار / درس
+ const fk=Object.keys(SP.feats).filter(k=>SP.feats[k].allowed);
+ if(fk.length)H.push(ac("feats","🛠","کار و درس","قابلیت‌های ویژه‌ای که پشتیبانی برات فعال کرده",bdg(fk.some(k=>SP.feats[k].active)?"روشن":"خاموش",fk.some(k=>SP.feats[k].active)),
+  fk.map(k=>{const f=SP.feats[k];return sw("feat",k,k==="work"?"💼":"📚",f.label,f.active?"روشن توی «"+esc(f.title)+"» — هر "+esc(f.every):"هر "+esc(f.every)+" "+esc(f.what),f.active)}).join("")
+  +`<div class="hint">فقط توی یک گپ می‌شه فعالش کرد. با روشن‌کردن، گپ هدف رو انتخاب می‌کنی.</div>`));
+ // ابزارها
+ H.push(ac("tools","🧰","ابزارها و دستورها","راهنمای همهٔ دستورهای نقطه‌دار",bdg(fa(SP.tools.length+1)+" مورد"),
+  `<div class="guide"><b>😂 میم</b><div class="gbody">${SP.meme.replace(/\n/g,"<br>")}</div></div>`
+  +SP.tools.map(t=>`<div class="guide"><b>${esc(t.t)}</b><div class="gbody">${t.b.replace(/\n/g,"<br>")}</div></div>`).join("")));
+ // حساب
+ H.push(ac("acct","⚙️","حساب و اتصال","توقف موقت، پینگ، قطع اتصال",bdg(SP.connected?"وصل":"قطع",SP.connected),
+  sw("do","pause","▶️","سلف فعال","با خاموش‌کردن، فقط کلمه‌های خودکار متوقف می‌شن",!SP.paused)
+  +`<span class="mini p" data-do="ping">🏓 پینگ</span>`+(SP.connected?`<span class="mini d" data-do="disc">🔌 قطع اتصال</span>`:`<span class="mini p" data-do="conn">🔗 اتصال اکانت</span>`)));
+ el.innerHTML=H.join("");
+}
+
+/* ---------- عملیات ---------- */
+async function sact(body){
+ if(SBUSY)return;SBUSY=true;
+ try{const r=await api("/api/self/act",body);if(r.state)SP=r.state;spRender();
+  if(r.ok){haptic("success");if(r.msg)toast(r.msg)}
+  else{haptic("error");toast(r.msg||SE[r.error]||"خطا");if(r.error==="need_target")pickTyping()}}
+ catch(e){toast(e.message);loadSP()}
+ finally{SBUSY=false}}
+function swFlip(v){
+ const [kind,k]=v.split(":");
+ if(kind==="do"){if(k==="tfx"){SP.text.fx=!SP.text.fx;spRender();sact({a:"type_fx",on:SP.text.fx})}
+  else if(k==="pause"){sact({a:"pause",paused:!SP.paused})}return}
+ if(kind==="feat"){const f=SP.feats[k];if(f.active){sact({a:"feat",k,on:false})}else pickFeat(k);return}
+ if(kind==="mode"){const on=!SP.modes[k].on;SP.modes[k].on=on;spRender();sact({a:"mode",m:k,on});return}
+ const on=!SP.toggles[k];
+ if(k==="typing_mode"&&on&&!SP.typing.has_target){pickTyping();return}
+ SP.toggles[k]=on;spRender();sact({a:kind,k,on})}
+function sheetOpen(h){$("sh").innerHTML=h;$("shw").classList.add("on")}
+function sheetClose(){$("shw").classList.remove("on");$("sh").innerHTML=""}
+function askText(o){return new Promise(res=>{
+ sheetOpen(`<h3>${o.title}</h3>${o.hint?`<div class="hint" style="margin:0 0 8px">${o.hint}</div>`:""}${o.multi?`<textarea id="ti" maxlength="${o.max||500}">${esc(o.value||"")}</textarea>`:`<input id="ti" maxlength="${o.max||40}" value="${esc(o.value||"")}">`}<button id="tok" style="margin-top:12px">ذخیره</button><button class="alt" id="tno">انصراف</button>`);
+ $("tok").onclick=()=>{const v=$("ti").value.trim();sheetClose();res(v||null)};$("tno").onclick=()=>{sheetClose();res(null)};setTimeout(()=>{const t=$("ti");t&&t.focus()},260)})}
+function pickChat(kind,title){return new Promise(res=>{
+ if(!SP.connected){toast(SE.not_connected);res(null);return}
+ sheetOpen(`<h3>${title}</h3><input id="cq" placeholder="جستجوی اسم گپ…"><div id="cl" style="margin-top:6px"><div class="hint">در حال دریافت از تلگرام…</div></div>`);
+ let t=null;
+ const load=async()=>{try{const r=await api("/api/self/dialogs",{kind,q:$("cq").value});
+  if(!r.ok){$("cl").innerHTML=`<div class="msg">${esc(SE[r.error]||"خطا")}</div>`;return}
+  $("cl").innerHTML=r.items.length?r.items.map(x=>`<div class="opt" data-id="${x.id}"><span>${x.k==="group"?"👥":x.k==="bot"?"🤖":"👤"}</span>${esc(x.t)}</div>`).join("")+(r.total>r.items.length?`<div class="hint">برای دیدن بقیه جستجو کن (${fa(r.total)} گپ)</div>`:""):`<div class="msg">گپی پیدا نشد.</div>`;
+  $("cl").querySelectorAll(".opt").forEach(o=>o.onclick=()=>{sheetClose();res(o.dataset.id)})}
+  catch(e){const c=$("cl");if(c)c.innerHTML=`<div class="msg">${esc(e.message)}</div>`}};
+ $("cq").oninput=()=>{clearTimeout(t);t=setTimeout(load,400)};load()})}
+async function pickTyping(){const id=await pickChat("typing","⌨️ تایپینگ توی کدوم گپ نشون داده بشه؟");if(id)sact({a:"typing_set",id})}
+async function pickFeat(k){const id=await pickChat("feat","📍 «"+SP.feats[k].label+"» توی کدوم گپ فعال بشه؟");if(id)sact({a:"feat",k,on:true,id})}
+function delaySheet(i){
+ const cur=SP.slots[i].delay,pre=[[0,"خاموش"],[5,"۵ ثانیه"],[10,"۱۰ ثانیه"],[30,"۳۰ ثانیه"],[60,"۱ دقیقه"],[300,"۵ دقیقه"],[600,"۱۰ دقیقه"],[1800,"۳۰ دقیقه"]];
+ sheetOpen(`<h3>⏱ هر چند ثانیه خودکار بگه؟</h3><div class="chipsel">${pre.map(p=>`<a class="${cur===p[0]?"on":""}" data-v="${p[0]}">${p[1]}</a>`).join("")}</div>
+ <div class="hint">یا عدد دلخواه (ثانیه، حداقل ${fa(SP.min_auto)}؛ مثل «۴۵» یا «۲ دقیقه»):</div><input id="dv" inputmode="numeric" placeholder="مثلاً 45"><button id="dok" style="margin-top:10px">ثبت</button>`);
+ $("sh").querySelectorAll(".chipsel a").forEach(a=>a.onclick=()=>{sheetClose();sact({a:"slot",i,f:"delay",v:parseInt(a.dataset.v,10)})});
+ $("dok").onclick=()=>{const v=$("dv").value.trim();if(!v)return;sheetClose();sact({a:"slot",i,f:"delay",v})}}
+function posSheet(i){
+ const cur=SP.slots[i].pos;
+ sheetOpen(`<h3>🎯 کدوم دکمهٔ پیام ربات زده بشه؟</h3>${["l","m","r","n"].map(k=>`<div class="opt ${cur===k?"on":""}" data-v="${k}">${esc(SP.pos[k])}</div>`).join("")}`);
+ $("sh").querySelectorAll(".opt").forEach(o=>o.onclick=()=>{sheetClose();sact({a:"slot",i,f:"pos",v:o.dataset.v})})}
+async function spDo(c){
+ const p=c.split(":");
+ switch(p[0]){
+  case"ping":sact({a:"ping"});break;
+  case"conn":{if(!SP.bot){toast("آدرس ربات پیدا نشد؛ توی ربات /self رو بزن.");break}
+   try{tg.openTelegramLink("https://t.me/"+SP.bot+"?start=self");tg.close()}catch(e){toast("توی ربات /self رو بزن.")}break}
+  case"disc":{const go=()=>sact({a:"disconnect"});if(tg&&tg.showConfirm)tg.showConfirm("اتصال قطع بشه و سشن اکانتت کامل بسته بشه؟",ok=>ok&&go());else go();break}
+  case"clk":sact({a:"clock",on:!SP.clock.on});break;
+  case"clkf":sact({a:"clock_font",font:parseInt(p[1],10)});break;
+  case"tsp":sact({a:"type_speed",v:parseInt(p[1],10)});break;
+  case"typing":pickTyping();break;
+  case"typclr":sact({a:"typing_clear"});break;
+  case"artext":{const v=await askText({title:"✏️ متن پاسخ خودکار",hint:"به کسی که توی پیوی پیام می‌ده فرستاده می‌شه (حداکثر ۵۰۰ حرف).",value:SP.ar_text,multi:true,max:500});if(v)sact({a:"ar_text",v});break}
+  case"wladd":{const v=await askText({title:"➕ ناظر: کلمه، @یوزرنیم یا آیدی",hint:"چندتا رو با کاما یا خط جدید جدا کن.",multi:true,max:300});if(v)sact({a:"wl_add",v});break}
+  case"wldel":sact({a:"wl_del",i:parseInt(p[1],10)});break;
+  case"muadd":{const v=await askText({title:"🔇 سکوت: آیدی عددی یا @یوزرنیم",hint:"چندتا رو با کاما یا خط جدید جدا کن. برای @یوزرنیم اکانت باید وصل باشه.",multi:true,max:300});if(v)sact({a:"mu_add",v});break}
+  case"mudel":sact({a:"mu_del",id:p[1]});break;
+  case"mode":if(p[1]==="clr")sact({a:"mode",m:p[2],clear:true});break;
+  case"slot":{const i=parseInt(p[2],10);
+   if(p[1]==="word"){const v=await askText({title:"📝 کلمهٔ اسلات "+fa(i+1),hint:"همین کلمه توی گپ انتخابی گفته می‌شه.",value:SP.slots[i].word,max:40});if(v)sact({a:"slot",i,f:"word",v})}
+   else if(p[1]==="chat"){const id=await pickChat("slot","💬 کلمه توی کدوم گپ گفته بشه؟");if(id)sact({a:"slot_chat",i,id})}
+   else if(p[1]==="delay")delaySheet(i);
+   else if(p[1]==="pos")posSheet(i);
+   else if(p[1]==="clr")sact({a:"slot_clear",i});
+   break}
+ }}
+document.addEventListener("click",e=>{
+ if(e.target===$("shw")){sheetClose();return}
+ if(!e.target.closest("#spx")||!SP)return;
+ const h=e.target.closest(".ach");if(h){const a=h.parentNode,id=a.dataset.id;OPEN.has(id)?OPEN.delete(id):OPEN.add(id);a.classList.toggle("open");return}
+ const g=e.target.closest(".guide");if(g){g.classList.toggle("open");return}
+ const f=e.target.closest("[data-fn]");if(f){sact({a:"font_mode",n:f.dataset.fn});return}
+ const s=e.target.closest("[data-sw]");if(s){swFlip(s.dataset.sw);return}
+ const d=e.target.closest("[data-do]");if(d)spDo(d.dataset.do)});
 
 /* ---------- تب بازی‌ها ---------- */
 function renderGames(s){
