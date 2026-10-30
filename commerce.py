@@ -346,8 +346,21 @@ def main_reply_kb():
     return ReplyKeyboardMarkup([[KeyboardButton(t, api_kwargs=({'style': st} if st else None)) for t, k, st in row] for row in MENU_ROWS],
                                resize_keyboard=True, is_persistent=True, input_field_placeholder='یکی از گزینه‌ها رو انتخاب کن')
 
+def app_row():
+    """دکمهٔ مینی‌اپ (فقط وقتی آدرس عمومی تنظیم شده باشه)."""
+    try:
+        import miniapp
+        from telegram import WebAppInfo
+        u = miniapp.app_url()
+        return [_B('📊 مینی‌اپ داشبورد', web_app=WebAppInfo(url=u))] if u else None
+    except Exception:
+        return None
+
 def home_kb():
-    return KB([[_B(t, callback_data=MENU_DATA[k], api_kwargs=({'style': st} if st else None)) for t, k, st in row] for row in MENU_ROWS])
+    rows = [[_B(t, callback_data=MENU_DATA[k], api_kwargs=({'style': st} if st else None)) for t, k, st in row] for row in MENU_ROWS]
+    ar = app_row()
+    if ar: rows.append(ar)
+    return KB(rows)
 def join_kb():
     rows=[[B('عضویت در '+ch, url=url)] for ch,url in CHANNELS]
     rows.append([B('✅ عضو شدم',callback_data='shop:check')]); return KB(rows)
@@ -826,7 +839,7 @@ async def callback(update,context,_q=None,_data=None):
         if uid in selfbot._clients: await selfbot.stop_client(uid,restore=True)
         await show_panel(q, '⏹ سلف خاموش شد. هزینه‌ی حالت خاموش ۰٫۲ الماس در ساعت است.',reply_markup=home_kb())
     elif data=='shop:board':
-        await show_photo(q, context, 'board', board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy',style='success')],[B('حساب کاربری',callback_data='shop:dash')],[B('منوی اصلی',callback_data='shop:home')]]))
+        await show_photo(q, context, 'board', board_text(uid), parse_mode='HTML', reply_markup=KB([[B('خرید الماس',callback_data='shop:buy',style='success')],[B('حساب کاربری',callback_data='shop:dash')]]+([app_row()] if app_row() else [])+[[B('منوی اصلی',callback_data='shop:home')]]))
     elif data=='shop:dash':
         sr = selfbot.get_row(uid)
         phone = (getattr(sr, 'phone', None) or 'ثبت نشده') if sr else 'ثبت نشده'
