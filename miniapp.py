@@ -822,9 +822,52 @@ function renderGames(s){
  ${cont}
  <button class="alt" id="gprac">🤖 تمرین با ربات (رایگان)</button>
  <div class="msg">برای بازی با شرط: توی گروه بنویس «مار و پله 10» و بقیه رو دعوت کن.</div>
+ </div></div>
+ <div class="gc" style="margin-top:14px"><div class="gb">
+ <h3>🎨 استیکرهای تلگرام</h3><p>لینک پک استیکر را از تلگرام کپی کن و اینجا وارد کن تا به مجموعه‌ات اضافه شود.</p>
+ <input id="sturl" dir="ltr" placeholder="https://t.me/addstickers/PackName" style="width:100%;margin:8px 0">
+ <button id="stadd">➕ افزودن پک استیکر</button><div id="stpacks" class="hint">در حال دریافت پک‌ها…</div>
  </div></div>`;
  const c=$("gcont");if(c)c.onclick=()=>openGame(s.game.id,false);
  $("gprac").onclick=startPractice;
+ loadStickerPacks();
+}
+
+/* ---------- پک‌های استیکر ---------- */
+let STPACKS=[];
+async function loadStickerPacks(){
+ const el=$("stpacks");if(!el)return;
+ try{
+  const r=await api("/api/snk/packs");STPACKS=r.packs||[];
+  el.innerHTML=STPACKS.length?STPACKS.map(p=>`<div class="row"><span>🎨 ${esc(p.title)} <small>(${fa(p.stickers.length)} استیکر)</small></span><span class="chip g">آماده</span></div>`).join(""):"هنوز پکی اضافه نکردی.";
+ }catch(e){el.textContent="دریافت پک‌ها ناموفق بود؛ دوباره تلاش کن."}
+ const b=$("stadd");if(b)b.onclick=async()=>{
+  const v=$("sturl").value.trim();if(!v){toast("لینک پک استیکر را وارد کن");return}
+  b.disabled=true;b.textContent="در حال افزودن…";
+  try{const r=await api("/api/snk/pack_add",{url:v});
+   if(r.ok){toast("✅ پک اضافه شد: "+r.title);$("sturl").value="";await loadStickerPacks()}
+   else toast(({bad_pack_link:"لینک پک معتبر نیست.",pack_not_found:"پک پیدا نشد یا ربات به آن دسترسی ندارد.",empty_pack:"این پک استیکری ندارد."})[r.error]||"افزودن پک ناموفق بود.")
+  }catch(e){toast(e.message)}finally{b.disabled=false;b.textContent="➕ افزودن پک استیکر"}
+ };
+}
+async function chooseSticker(){
+ try{
+  const r=await api("/api/snk/packs");STPACKS=r.packs||[];
+  if(!STPACKS.length){toast("اول از بخش بازی‌ها یک پک استیکر اضافه کن.");return}
+  sheetOpen(`<h3>🎨 انتخاب استیکر</h3>${STPACKS.map(p=>`<div class="opt" data-pack="${p.id}">🎨 ${esc(p.title)} · ${fa(p.stickers.length)} استیکر</div>`).join("")}<div id="stchoose"></div>`);
+  $("sh").querySelectorAll("[data-pack]").forEach(el=>el.onclick=()=>{
+   const p=STPACKS.find(x=>x.id===Number(el.dataset.pack));if(!p)return;
+   $("stchoose").innerHTML=`<div class="fg">${p.stickers.map((x,i)=>`<div class="fc" data-st="${i}" data-pk="${p.id}"><div class="sm1" style="font-size:28px">${esc(x.emoji||"🙂")}</div><small>استیکر ${fa(i+1)}</small></div>`).join("")}</div>`;
+   $("stchoose").querySelectorAll("[data-st]").forEach(x=>x.onclick=async()=>{
+    sheetClose();try{const r=await api("/api/snk/chat",{gid:GID,kind:"sticker",pack_id:Number(x.dataset.pk),index:Number(x.dataset.st)});if(r.game)applyG(r.game);if(r.error)toast("ارسال استیکر انجام نشد.")}catch(e){toast(e.message)}
+   });
+  });
+ }catch(e){toast(e.message)}
+}
+async function sendGameChat(){
+ const el=$("gchattext");if(!el)return;const text=el.value.trim();if(!text)return;
+ try{const r=await api("/api/snk/chat",{gid:GID,kind:"text",text});if(r.game){el.value="";applyG(r.game)}else toast("ارسال پیام ناموفق بود")}
+ catch(e){toast(e.message)}
 }
 
 /* ---------- بازی مار و پله ---------- */
@@ -936,7 +979,7 @@ async function poll(){try{const r=await api("/api/snk/state",{gid:GID});
 function nameOf(g,id){const p=g.players.find(x=>x.id===id);return p?p.name:"—"}
 function applyG(g){
  GS=g;LEFT=g.left;LAT=Date.now();GID=g.id;
- const sig=JSON.stringify([g.status,g.turn,g.seq,g.players.map(p=>[p.pos,p.out]),g.winner]);
+ const sig=JSON.stringify([g.status,g.turn,g.seq,g.players.map(p=>[p.pos,p.out]),g.winner,g.chat||[]]);
  if(sig!==SIG){SIG=sig;renderTop(g)}
  g.players.forEach(p=>{if(!TKE[p.id])setTok(p,FIRST?p.pos:0,false)});
  if(g.last&&g.last.seq!==LSEQ){
@@ -978,7 +1021,13 @@ function renderTop(g){
  const L=g.last,ev=L?(L.ev==="ladder"?" 🪜":L.ev==="snake"?" 🐍":""):"";
  const lt=L?`${nm(L.pid)}: ${fa(L.r)} ← ${fa(L.from)} به ${fa(L.to)}${ev}${L.auto?" (خودکار)":""}`:"";
  const money=g.practice?`<div class="row"><span>🤖 حالت تمرین</span><span>بدون الماس</span></div>`:`<div class="row"><span>💎 شرط هر نفر</span><span>${num(g.bet)}</span></div><div class="row"><span>🎁 جایزهٔ کل</span><span>${num(g.pot)}</span></div>`;
- $("gtop").innerHTML=`<div class="top">${top}</div>${money}${pl}`;
+ const chat=(g.chat||[]).map(m=>`<div class="row" style="align-items:flex-start"><span><b>${esc(m.name)}:</b> ${m.kind==="sticker"?"🎨 استیکر "+esc(m.emoji||"🙂"):esc(m.text||"")}</span></div>`).join("");
+ const chatbox=g.practice?"":`<div class="gc" style="margin:12px 0;padding:12px"><h3>💬 چت بازی</h3><div style="max-height:180px;overflow:auto">${chat||'<div class="hint">هنوز پیامی نیست.</div>'}</div><div style="display:flex;gap:6px;margin-top:8px"><input id="gchattext" placeholder="پیام بنویس…" maxlength="300"><button id="gchatsend" style="width:auto">ارسال</button><button id="gchatst" class="alt" style="width:auto">🎨</button></div></div>`;
+ $("gtop").innerHTML=`<div class="top">${top}</div>${money}${pl}${chatbox}`;
+ const csend=$("gchatsend"),cinput=$("gchattext"),cst=$("gchatst");
+ if(csend)csend.onclick=sendGameChat;
+ if(cinput)cinput.onkeydown=e=>{if(e.key==="Enter")sendGameChat()};
+ if(cst)cst.onclick=chooseSticker;
  $("glog").innerHTML=g.log.map(x=>esc(x)).join("<br>");
  /* دکمهٔ تاس و خود تاس پایین صفحه (ثابت) */
  const dk=$("gdock"),rb=$("rb");

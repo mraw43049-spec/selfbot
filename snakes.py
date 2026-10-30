@@ -24,7 +24,7 @@ import secrets
 import time
 from decimal import Decimal, ROUND_DOWN
 
-from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy import BigInteger, Column, Integer, String, Text
 
 import database
 from database import Base, get_session
@@ -62,6 +62,15 @@ class SnakeGame(Base):
     status = Column(String(12), default="lobby")
     updated = Column(Integer, default=0)
     data = Column(Text, default="{}")
+
+
+class StickerPack(Base):
+    __tablename__ = "snake_sticker_packs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(BigInteger, nullable=False, index=True)
+    name = Column(String(64), nullable=False)
+    title = Column(String(128), nullable=False)
+    stickers = Column(Text, nullable=False, default="[]")
 
 
 def _cm():
@@ -463,7 +472,7 @@ def state_for(g, uid):
         "turn": cur, "left": max(0, g["deadline"] - now) if g["status"] in ("lobby", "playing") else 0,
         "turn_sec": TURN_SEC, "last": g.get("last"), "log": g["log"][-6:], "winner": g.get("winner"),
         "payout": g.get("payout"), "tax": g.get("tax"), "seq": g["seq"],
-        "snakes": SNAKES, "ladders": LADDERS,
+        "snakes": SNAKES, "ladders": LADDERS, "chat": (g.get("messages") or [])[-30:],
     }
 
 
@@ -475,10 +484,88 @@ def active_summary(uid):
 async def api(path, uid, data):
     gid = data.get("gid")
     g = GAMES.get(gid) if isinstance(gid, int) and not isinstance(gid, bool) else None
-    if g and not any(p["id"] == uid for p in g["players"]):
+    if g and path not in ("/api/snk/packs", "/api/snk/pack_add") and not any(p["id"] == uid for p in g["players"]):
         return {"game": None, "error": "not_player"}
     if not g:
         g = _active_of(uid)
+    if path == "/api/snk/packs":
+        s = get_session()
+        try:
+            rows = s.query(StickerPack).filter(StickerPack.owner_id == uid).order_by(StickerPack.id.desc()).all()
+            return {"packs": [{"id": r.id, "name": r.name, "title": r.title,
+                               "stickers": json.loads(r.stickers)} for r in rows]}
+        finally:
+            s.close()
+    if path == "/api/snk/pack_add":
+        raw = str(data.get("url") or "").strip()
+        mt = re.search(r"(?:t\.me|telegram\.me)/(?:addstickers|stickers)/([A-Za-z0-9_]{3,64})", raw)
+        if not mt:
+            return {"error": "bad_pack_link"}
+        pack_name = mt.group(1)
+        try:
+            st = await _app[0].bot.get_sticker_set(pack_name)
+            stickers = [{"file_id": x.file_id, "emoji": x.emoji or "🙂",
+                         "animated": bool(x.is_animated), "video": bool(x.is_video)}
+                        for x in st.stickers[:120]]
+            if not stickers:
+                return {"error": "empty_pack"}
+            s = get_session()
+            try:
+                old = s.query(StickerPack).filter(StickerPack.owner_id == uid,
+                                                   StickerPack.name == pack_name).first()
+                if old:
+                    old.title, old.stickers = st.title[:128], json.dumps(stickers, ensure_ascii=False)
+                else:
+                    s.add(StickerPack(owner_id=uid, name=pack_name, title=st.title[:128],
+                                      stickers=json.dumps(stickers, ensure_ascii=False)))
+                s.commit()
+            finally:
+                s.close()
+            return {"ok": True, "title": st.title, "count": len(stickers)}
+        except Exception as e:
+            logger.info("snakes sticker pack load failed: %s", e)
+            return {"error": "pack_not_found"}
+    if path == "/api/snk/chat":
+        if not g or not any(p["id"] == uid for p in g["players"]):
+            return {"error": "not_player"}
+        kind = str(data.get("kind") or "text")
+        msg = {"uid": uid, "name": next((p["name"] for p in g["players"] if p["id"] == uid), "بازیکن"),
+               "at": _now()}
+        if kind == "text":
+            value = " ".join(str(data.get("text") or "").split())[:300]
+            if not value:
+                return {"error": "empty_message"}
+            msg.update({"kind": "text", "text": value})
+        elif kind == "sticker":
+            try:
+                pack_id, ix = int(data.get("pack_id")), int(data.get("index"))
+            except (TypeError, ValueError):
+                return {"error": "bad_sticker"}
+            s = get_session()
+            try:
+                pack = s.query(StickerPack).filter(StickerPack.id == pack_id,
+                                                    StickerPack.owner_id == uid).first()
+                if not pack:
+                    return {"error": "pack_not_found"}
+                stickers = json.loads(pack.stickers)
+                if not 0 <= ix < len(stickers):
+                    return {"error": "bad_sticker"}
+                chosen = stickers[ix]
+                msg.update({"kind": "sticker", "file_id": chosen["file_id"],
+                            "emoji": chosen.get("emoji", "🙂")})
+            finally:
+                s.close()
+        else:
+            return {"error": "bad_request"}
+        g.setdefault("messages", []).append(msg)
+        del g["messages"][:-50]
+        _save(g)
+        if kind == "sticker":
+            try:
+                await _app[0].bot.send_sticker(chat_id=g["chat"], sticker=msg["file_id"])
+            except Exception:
+                logger.info("snakes: group sticker delivery failed", exc_info=True)
+        return {"ok": True, "game": state_for(g, uid)}
     if path == "/api/snk/state":
         return {"game": state_for(g, uid) if g else None}
     if path == "/api/snk/roll":
