@@ -6,7 +6,7 @@
 - احراز هویت: initData تلگرام با HMAC و BOT_TOKEN چک می‌شه؛ آیدی کاربر فقط از همون خونده می‌شه (نه از ورودی کاربر).
 - متغیرها: MINIAPP_URL (آدرس عمومی https، اختیاری؛ اگه نباشه از RAILWAY_PUBLIC_DOMAIN ساخته می‌شه)،
   PORT (Railway خودش می‌ده)، MINIAPP_DISABLED=1 برای خاموش‌کردن کامل.
-- نصب: توی main.py بعد از commerce.setup(app) یک خط:   import miniapp; miniapp.setup(app)   (بازی مار و پله، snakes.py، خودش از همین‌جا نصب می‌شه)
+- نصب: خودکار؛ commerce.setup(app) این ماژول رو صدا می‌زنه (مار و پله، snakes.py، هم از همین‌جا نصب می‌شه). تغییر main.py لازم نیست.
 """
 import asyncio
 import hashlib
@@ -316,7 +316,12 @@ async def cmd_app(update, context):
 
 def setup(app):
     from telegram.ext import CommandHandler
+    if _app_ref[0] is app:      # اگه دستی هم صدا زده بشه، دوبار نصب نمی‌شه
+        return
     _app_ref[0] = app
+    # آدرس درخواست‌های httpx شامل توکن رباته؛ از لاگ پنهانش می‌کنیم
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     if os.environ.get("MINIAPP_DISABLED", "").strip().lower() in ("1", "true", "yes", "on"):
         return
     if not base_url():

@@ -1758,3 +1758,8 @@ def setup(app):
     app.add_handler(CallbackQueryHandler(callback,pattern=r'^shop:'),group=-10)
     app.add_handler(MessageHandler((~filters.COMMAND)&filters.ChatType.PRIVATE, incoming),group=-10)
     app.job_queue.run_repeating(charge_job, interval=300, first=60, name='diamond-hourly-charges')
+    try:   # مینی‌اپ + مار و پله؛ نیازی به تغییر main.py نیست و خطاش هیچ‌وقت ربات رو از کار نمی‌ندازه
+        import miniapp
+        miniapp.setup(app)
+    except Exception:
+        import logging; logging.getLogger(__name__).exception('miniapp setup failed')
