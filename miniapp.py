@@ -397,7 +397,7 @@ HTML = r"""<!doctype html>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Vazirmatn",Tahoma,sans-serif;
 padding:16px 14px calc(84px + env(safe-area-inset-bottom));min-height:100vh}
-body.ing{padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+body.ing{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
 h1{font-size:18px;margin:0 0 14px}
 .hero{background:var(--card);border-radius:18px;padding:18px;text-align:center}
 .hero .n{font-size:40px;font-weight:700;line-height:1.1}
@@ -419,25 +419,61 @@ button:disabled{opacity:.55}
 .pl{display:flex;align-items:center;gap:8px;background:var(--card);border-radius:12px;padding:9px 12px;margin-top:6px;font-size:14px}
 .pl u{display:inline-block;width:13px;height:13px;border-radius:50%;border:1.5px solid #fff;text-decoration:none;flex:none}
 .pl span{flex:1}.pl.cur{outline:2px solid var(--btn)}.pl.out{opacity:.45;text-decoration:line-through}
-.dice{font-size:64px;line-height:1;text-align:center;margin-top:12px}
-.shake{animation:sh .6s}
-@keyframes sh{0%{transform:rotate(0)}25%{transform:rotate(-25deg) scale(1.2)}50%{transform:rotate(25deg) scale(1.2)}75%{transform:rotate(-12deg)}100%{transform:rotate(0)}}
 .top{background:var(--card);border-radius:14px;padding:12px;text-align:center;font-size:15px}
 .lg{color:var(--hint);font-size:12px;margin-top:8px;line-height:1.7}
 
-/* ---- تخته (عکس + لایهٔ شماره‌ها و مهره‌ها) ---- */
-.bw{position:relative;width:100%;max-width:520px;margin:12px auto 0;border-radius:14px;overflow:hidden;background:#1d2733;direction:ltr}
-.bw img{display:block;width:100%;height:auto}
-.bw.nobg{aspect-ratio:1024/1536}
-.ov{position:absolute;left:15.918%;top:18.229%;width:72.266%;height:70.964%;display:grid;grid-template-columns:repeat(10,1fr);grid-template-rows:repeat(10,1fr)}
-.nobg .c1{outline:1px solid rgba(255,255,255,.18)}
-.c1{position:relative}
-.c1 b{position:absolute;top:2px;left:2px;font:700 8.5px/1 system-ui,sans-serif;color:#fff;background:rgba(0,0,0,.52);padding:1px 3px;border-radius:4px}
-.c1.hs b{background:rgba(214,45,45,.9)}.c1.ld b{background:rgba(35,150,80,.92)}
-.tkl{position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none}
-.tok{position:absolute;width:21px;height:21px;margin:-10px 0 0 -10px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 2px 7px rgba(0,0,0,.65);transition:left .2s ease-out,top .2s ease-out,opacity .3s;z-index:3}
+.dice3{width:66px;height:66px;perspective:420px;flex:none;margin:6px 10px 6px 4px}
+.dice3.roll{animation:dhop 1s ease-out}
+@keyframes dhop{0%{transform:translateY(0) scale(1)}25%{transform:translateY(-34px) scale(1.12)}50%{transform:translateY(0) scale(.95)}68%{transform:translateY(-12px)}84%{transform:translateY(0) scale(1.03)}100%{transform:translateY(0)}}
+.tilt{position:relative;width:100%;height:100%;transform-style:preserve-3d;transform:rotateX(-24deg) rotateY(-30deg)}
+.cube{position:relative;width:100%;height:100%;transform-style:preserve-3d}
+.df{position:absolute;inset:0;border-radius:13px;display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);padding:9px;
+ background:radial-gradient(circle at 30% 22%,#fff 0%,#f4f1ff 45%,#d6d2f0 100%);
+ box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.9),inset 0 -5px 9px rgba(90,80,160,.35),inset 0 4px 7px rgba(255,255,255,.9),0 0 14px rgba(124,92,255,.55)}
+.df i{place-self:center;width:82%;height:82%;border-radius:50%}
+.df i.p{background:radial-gradient(circle at 34% 28%,#ff8aa0 0%,#e0143f 45%,#6d0019 100%);box-shadow:inset 0 -1.5px 2.5px rgba(0,0,0,.45),0 0 3px rgba(255,60,90,.5)}
+.f1 i.p{width:112%;height:112%}
+.f1{transform:translateZ(33px)}.f6{transform:rotateY(180deg) translateZ(33px)}
+.f2{transform:rotateY(90deg) translateZ(33px)}.f5{transform:rotateY(-90deg) translateZ(33px)}
+.f3{transform:rotateX(90deg) translateZ(33px)}.f4{transform:rotateX(-90deg) translateZ(33px)}
+.dsh{position:absolute;left:8%;right:8%;bottom:-10px;height:10px;border-radius:50%;background:radial-gradient(closest-side,rgba(0,0,0,.55),transparent);pointer-events:none}
+.quake{animation:qk .55s}
+@keyframes qk{0%,100%{transform:translate(0,0)}15%{transform:translate(-4px,2px)}30%{transform:translate(4px,-2px)}45%{transform:translate(-3px,-2px)}60%{transform:translate(3px,2px)}80%{transform:translate(-1px,1px)}}
+.gbar{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.gbar .sm{margin-bottom:6px}
+.dkw{position:fixed;left:0;right:0;bottom:0;z-index:6;padding:26px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(9,13,27,0),rgba(9,13,27,.94) 38%);display:none}
+.dk{max-width:520px;margin:0 auto;display:flex;align-items:center;gap:16px;background:rgba(18,25,51,.97);border:1px solid rgba(124,92,255,.35);border-radius:24px;padding:12px 16px;box-shadow:0 -8px 30px rgba(124,92,255,.28)}
+.dkr{flex:1;min-width:0;text-align:center}
+.dkt{font-size:13px;color:var(--hint);min-height:36px;line-height:1.55;margin-bottom:6px}
+.dk button{margin:0;padding:15px 10px;font-size:17px;border-radius:16px}
+.dk button.go{animation:gp 1.4s ease-in-out infinite}
+.dk button:disabled{animation:none;opacity:.55}
+@keyframes gp{0%,100%{box-shadow:0 6px 20px rgba(124,92,255,.35)}50%{box-shadow:0 0 0 5px rgba(25,211,255,.25),0 6px 28px rgba(25,211,255,.6)}}
+body.ing .toast{bottom:calc(150px + env(safe-area-inset-bottom))}
+
+/* ---- تخته (مربع‌های واقعی؛ شماره داخل هر خونه؛ مار و نردبان با SVG روی همون جدول) ---- */
+.ban{aspect-ratio:820/218;background:#1d2733 url(/board.jpg) top center/100% auto no-repeat;border-radius:16px 16px 0 0;max-width:520px;margin:12px auto 0}
+.bwrap{max-width:520px;margin:0 auto;padding:9px 9px 6px;background:linear-gradient(180deg,#7a4d28,#5a3818 55%,#6f4623);border-radius:0 0 16px 16px;box-shadow:0 10px 30px rgba(0,0,0,.5),inset 0 0 0 2px rgba(255,210,140,.18);direction:ltr}
+.bw{position:relative;width:100%;aspect-ratio:1;container-type:inline-size;border-radius:6px;box-shadow:0 0 0 3px #3a230e,0 0 0 4px rgba(255,200,120,.35)}
+.cg{position:absolute;inset:0;display:grid;grid-template-columns:repeat(10,1fr);grid-template-rows:repeat(10,1fr);border-radius:4px;overflow:hidden}
+.cl{position:relative;border:.5px solid rgba(0,0,0,.18)}
+.cl.lt{background:linear-gradient(135deg,#f7ecd2,#e2d1aa)}.cl.dk2{background:linear-gradient(135deg,#2d3a49,#1a2430)}
+.cl.hs::before,.cl.ld::before,.cl.fin::before{content:"";position:absolute;inset:0}
+.cl.hs::before{background:rgba(255,70,70,.2)}.cl.ld::before{background:rgba(50,220,120,.22)}
+.cl.fin::before{background:linear-gradient(135deg,rgba(255,215,64,.75),rgba(255,160,0,.55))}
+.nm{pointer-events:none;z-index:3}
+.nm b{position:absolute;top:2px;left:2px;font:800 clamp(8px,2.7vw,12.5px)/1 system-ui,sans-serif;color:#fff;background:rgba(10,14,30,.62);padding:1.5px 3.5px;border-radius:4px;letter-spacing:.2px}
+.nm b.h{background:rgba(214,45,45,.92)}.nm b.l{background:rgba(30,150,80,.94)}.nm b.f{background:#d99a00;color:#fff}
+.art{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:2}
+.tkl{position:absolute;inset:0;pointer-events:none;z-index:5}
+.stp{display:flex;justify-content:flex-end;align-items:center;height:30px;margin-top:5px;color:#ffd9a0;font:800 12px system-ui,sans-serif;letter-spacing:2px;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+.tok{position:absolute;width:22px;height:22px;width:5.7cqw;height:5.7cqw;transform:translate(-50%,-50%);border-radius:50%;border:2.5px solid #fff;
+ background-image:radial-gradient(circle at 32% 26%,rgba(255,255,255,.6),transparent 55%);
+ box-shadow:0 3px 8px rgba(0,0,0,.7);transition:left .2s ease-out,top .2s ease-out,opacity .3s;z-index:3}
+.tok.step{animation:thop .17s ease-out}
+@keyframes thop{0%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-78%) scale(1.18)}100%{transform:translate(-50%,-50%) scale(1)}}
 .tok.jump{transition:left .9s cubic-bezier(.55,0,.25,1),top .9s cubic-bezier(.55,0,.25,1)}
-.tok.me{box-shadow:0 0 0 3px rgba(255,235,59,.9),0 2px 7px rgba(0,0,0,.65)}
+.tok.me{box-shadow:0 0 0 3px rgba(255,235,59,.95),0 3px 8px rgba(0,0,0,.7)}
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:92%;background:rgba(20,20,20,.88);color:#fff;padding:10px 16px;border-radius:14px;font-size:14px;z-index:9;display:none;text-align:center}
 
 /* ---- تب‌ها و بازی‌ها ---- */
@@ -804,30 +840,136 @@ function renderGames(s){
 }
 
 /* ---------- بازی مار و پله ---------- */
-const COLORS=["#e5484d","#2e9e5b","#2481cc","#f5a524"],FACE=["⚀","⚁","⚂","⚃","⚄","⚅"];
+/* ---------- افکت‌های صوتی (WebAudio، بدون فایل؛ بلند و با کمپرسور) ---------- */
+const SFX=(()=>{
+ let ac=null,mg=null,nb=null,on=true;
+ try{on=localStorage.getItem("snk_snd")!=="0"}catch(e){}
+ function ctx(){
+  if(!ac){try{const C=window.AudioContext||window.webkitAudioContext;ac=new C();
+   const cp=ac.createDynamicsCompressor();cp.threshold.value=-8;cp.knee.value=10;cp.ratio.value=14;cp.attack.value=.002;cp.release.value=.12;
+   mg=ac.createGain();mg.gain.value=1.9;mg.connect(cp);cp.connect(ac.destination);
+   nb=ac.createBuffer(1,ac.sampleRate,ac.sampleRate);const d=nb.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1}catch(e){ac=null}}
+  if(ac&&ac.state==="suspended")ac.resume().catch(()=>{});
+  return ac}
+ function tone(f,t,d,type,v,to){const a=ctx();if(!a||!on)return;t=a.currentTime+t;
+  const o=a.createOscillator(),g=a.createGain();o.type=type||"square";o.frequency.setValueAtTime(f,t);
+  if(to)o.frequency.exponentialRampToValueAtTime(to,t+d);
+  g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(v,t+.006);g.gain.exponentialRampToValueAtTime(.0001,t+d);
+  o.connect(g);g.connect(mg);o.start(t);o.stop(t+d+.03);return o}
+ function noise(t,d,v,ft,f0,f1,q){const a=ctx();if(!a||!on)return;t=a.currentTime+t;
+  const s=a.createBufferSource();s.buffer=nb;s.loop=true;
+  const f=a.createBiquadFilter();f.type=ft||"bandpass";f.Q.value=q||1;f.frequency.setValueAtTime(f0,t);if(f1)f.frequency.exponentialRampToValueAtTime(f1,t+d);
+  const g=a.createGain();g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(v,t+Math.min(.02,d/3));g.gain.exponentialRampToValueAtTime(.0001,t+d);
+  s.connect(f);f.connect(g);g.connect(mg);s.start(t);s.stop(t+d+.03)}
+ return{
+  unlock(){ctx()},
+  get on(){return on},
+  set(v){on=!!v;try{localStorage.setItem("snk_snd",on?"1":"0")}catch(e){}if(on)ctx()},
+  tick(){tone(900,0,.05,"square",.5);tone(1350,.03,.06,"square",.4)},
+  dice(){ // قل‌خوردن تاس: تق‌تق‌های پشت‌سرهم که کند می‌شن + کوبیدن نهایی
+   const n=16;for(let i=0;i<n;i++){const t=.95*Math.pow(i/n,1.55),v=.95-i*.03;
+    noise(t,.035,v,"bandpass",1800+Math.random()*2200,null,2.5);
+    tone(600+Math.random()*900,t,.045,"square",v*.55,300+Math.random()*200)}
+   tone(190,.98,.22,"sine",1.2,45);noise(.98,.07,1,"lowpass",900,200,1);tone(520,.99,.08,"square",.6,260)},
+  six(){tone(880,0,.1,"square",.5);tone(1320,.09,.16,"square",.5);tone(1760,.2,.22,"triangle",.6)},
+  step(k){const f=380+(k%10)*34;tone(f,0,.1,"triangle",1,f*1.5);tone(f*2,0,.05,"sine",.5);noise(0,.025,.5,"highpass",3000)},
+  ladder(){ // بالا رفتن از نردبون: پله‌پله + نت‌های صعودی + وووش
+   const N=[523,659,784,1047,1319,1568,2093];
+   N.forEach((f,i)=>{tone(f,i*.085,.16,"square",.45);tone(f/2,i*.085,.18,"triangle",.8);noise(i*.085,.03,.6,"bandpass",2500,null,3)});
+   noise(0,.75,.6,"bandpass",300,4500,1.2);
+   [2093,2637,3136].forEach((f,i)=>tone(f,.62+i*.07,.28,"sine",.55))},
+  snake(){ // گاز مار: هیس + سُر خوردن به پایین + تپ + نت‌های غمگین
+   noise(0,1,1,"highpass",2500,6500,.8);noise(0,.9,.7,"bandpass",5200,1800,3);
+   const o=tone(620,.05,.95,"sawtooth",.65,70);
+   const a=ctx();if(a&&o&&on){const l=a.createOscillator(),lg=a.createGain();l.frequency.value=14;lg.gain.value=28;l.connect(lg);lg.connect(o.frequency);l.start(a.currentTime+.05);l.stop(a.currentTime+1.05)}
+   tone(130,.95,.3,"sine",1.3,38);noise(.95,.08,1,"lowpass",700,150,1);
+   [392,349,311,262].forEach((f,i)=>tone(f,.35+i*.16,.17,"square",.4))},
+  win(){[523,659,784,1047].forEach((f,i)=>{tone(f,i*.13,.22,"square",.5);tone(f/2,i*.13,.25,"sawtooth",.5)});
+   [1047,1319,1568].forEach(f=>{tone(f,.55,.9,"square",.4);tone(f/2,.55,.9,"sawtooth",.4)});noise(.55,.5,.4,"highpass",5000,9000)},
+  lose(){[392,330,262,196].forEach((f,i)=>tone(f,i*.2,.28,"sawtooth",.55,f*.96))}}})();
+document.addEventListener("pointerdown",()=>SFX.unlock(),{passive:true});
+
+/* ---------- تاس سه‌بعدی ---------- */
+const PIPS={1:[4],2:[0,8],3:[0,4,8],4:[0,2,6,8],5:[0,2,4,6,8],6:[0,2,3,5,6,8]},
+ DFACE={1:[0,0],6:[0,180],2:[0,-90],5:[0,90],3:[-90,0],4:[90,0]};
+let DSPIN=0;
+function diceHTML(){let h='<div class="tilt"><div class="cube" id="cb">';
+ for(let k=1;k<=6;k++)h+=`<div class="df f${k}">`+[0,1,2,3,4,5,6,7,8].map(i=>`<i${PIPS[k].includes(i)?' class="p"':""}></i>`).join("")+"</div>";
+ return h+'</div></div><div class="dsh"></div>'}
+function setDice(r,anim){const cb=$("cb");if(!cb)return;const f=DFACE[r]||DFACE[1];
+ if(anim){DSPIN++;cb.style.transition="transform 1s cubic-bezier(.12,.75,.2,1)"}else cb.style.transition="none";
+ cb.style.transform=`rotateX(${f[0]+720*DSPIN}deg) rotateY(${f[1]+1080*DSPIN}deg)`}
+async function rollDice(r){
+ const w=$("dc");SFX.dice();haptic("light");
+ if(w){w.classList.remove("roll");void w.offsetWidth;w.classList.add("roll")}
+ setDice(r,true);await sleep(1050);if(w)w.classList.remove("roll");
+ if(r===6)SFX.six()}
+
+/* ---------- تخته ---------- */
+const COLORS=["#e5484d","#2e9e5b","#2481cc","#f5a524"];
 const GE={not_player:"تو توی این بازی نیستی.",no_game:"این بازی فعال نیست.",not_your_turn:"نوبت تو نیست.",rate:"کمی صبر کن."};
 let GID=null,GS=null,SIG="",LSEQ=-1,LEFT=0,LAT=0,PT=null,RB=false,FIRST=true,STOPAT=0,PRAC=false,PG=null,PON=false;
 let TKE={},DISP={},Q=Promise.resolve();
+/* شماره‌گذاری زیگزاگ (مثل تختهٔ واقعی): ردیف پایین از چپ به راست، ردیف بعدی برعکس، ... تا ۱۰۰ بالا. [ستون، ردیف از بالا] */
+function cellRC(n){const r=Math.floor((n-1)/10),i=(n-1)%10;return [r%2===0?i:9-i,9-r]}
+function cc(n){const p=cellRC(n);return [p[0]*10+5,p[1]*10+5]}
 function tokPos(n,idx){
- if(n<=0)return [3+(idx%4)*4.2,103];
- const c=(n-1)%10,rt=9-Math.floor((n-1)/10);
- const dx=[-2.4,2.4,-2.4,2.4][idx%4],dy=[-1.8,-1.8,1.8,1.8][idx%4];
- return [c*10+5+dx,rt*10+5+dy]}
-function setTok(p,n,jump){
+ if(n<=0)return [4+(idx%4)*6,105.5];
+ const p=cellRC(n),dx=[-2,2,-2,2][idx%4],dy=[-1.6,-1.6,1.9,1.9][idx%4];
+ return [p[0]*10+5+dx,p[1]*10+5.6+dy]}
+function setTok(p,n,jump,step){
  let e=TKE[p.id];
- if(!e){e=document.createElement("div");e.className="tok";e.style.background=COLORS[p.idx%4];$("tkl").appendChild(e);TKE[p.id]=e}
+ if(!e){e=document.createElement("div");e.className="tok";e.style.backgroundColor=COLORS[p.idx%4];$("tkl").appendChild(e);TKE[p.id]=e}
  const g=GS;e.classList.toggle("me",!!(g&&p.id===g.me));
  e.classList.toggle("jump",!!jump);
+ if(step){e.classList.remove("step");void e.offsetWidth;e.classList.add("step")}
  const xy=tokPos(n,p.idx);e.style.left=xy[0]+"%";e.style.top=xy[1]+"%";e.style.opacity=p.out?".35":"1";DISP[p.id]=n}
+const SNKPAL=[["#2fbf4a","#1c7a2e","#9cf08f"],["#e0443c","#8c1d18","#ff9b8f"],["#3d7dff","#1d3f99","#9fc3ff"],["#a54bd6","#5e1f85","#e1a8ff"],["#ff9a1f","#a55a00","#ffd493"],["#1fb5b0","#0d6764","#8ff0eb"],["#e8c21a","#8a6f00","#fff0a0"]];
+const f1=x=>Math.round(x*100)/100;
+function ladderSVG(a0,b0){
+ const a=cc(a0),b=cc(b0),dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy),ux=dx/L,uy=dy/L,px=-uy*1.35,py=ux*1.35;
+ const ln=(x1,y1,x2,y2,c,w,o)=>`<line x1="${f1(x1)}" y1="${f1(y1)}" x2="${f1(x2)}" y2="${f1(y2)}" stroke="${c}" stroke-width="${w}" stroke-linecap="round"${o?` opacity="${o}"`:""}/>`;
+ let s="";const n=Math.max(2,Math.floor(L/3.3));
+ s+=ln(a[0]+px+.5,a[1]+py+.7,b[0]+px+.5,b[1]+py+.7,"#000",1.3,.3)+ln(a[0]-px+.5,a[1]-py+.7,b[0]-px+.5,b[1]-py+.7,"#000",1.3,.3);
+ for(let i=1;i<n;i++){const t=i/n,x=a[0]+dx*t,y=a[1]+dy*t;s+=ln(x+px,y+py,x-px,y-py,"#8a5324",1.05)+ln(x+px,y+py-.2,x-px,y-py-.2,"#d9a05b",.4)}
+ s+=ln(a[0]+px,a[1]+py,b[0]+px,b[1]+py,"#6b3d14",1.35)+ln(a[0]-px,a[1]-py,b[0]-px,b[1]-py,"#6b3d14",1.35);
+ s+=ln(a[0]+px,a[1]+py,b[0]+px,b[1]+py,"#c98a45",.5)+ln(a[0]-px,a[1]-py,b[0]-px,b[1]-py,"#c98a45",.5);
+ return s}
+function snakeSVG(h,t,idx){
+ const a=cc(h),b=cc(t),dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy),px=-dy/L,py=dx/L,C=SNKPAL[idx%SNKPAL.length];
+ const N=40,A=Math.min(3.4,1.5+L/26),W=Math.max(1.5,L/15),P=[];
+ for(let i=0;i<=N;i++){const s=i/N,o=A*Math.sin(Math.PI*s)*Math.sin(2*Math.PI*W*s);P.push([a[0]+dx*s+px*o,a[1]+dy*s+py*o])}
+ const wd=s=>s<.65?3.1:3.1*(1-(s-.65)/.35*.72)+.4;
+ let o="",f="";
+ for(let i=0;i<N;i++){const s=i/N,w=wd(s);
+  o+=`<line x1="${f1(P[i][0])}" y1="${f1(P[i][1])}" x2="${f1(P[i+1][0])}" y2="${f1(P[i+1][1])}" stroke="${C[1]}" stroke-width="${f1(w+.9)}" stroke-linecap="round"/>`;
+  f+=`<line x1="${f1(P[i][0])}" y1="${f1(P[i][1])}" x2="${f1(P[i+1][0])}" y2="${f1(P[i+1][1])}" stroke="${Math.floor(i/2)%2?C[2]:C[0]}" stroke-width="${f1(w)}" stroke-linecap="round"/>`}
+ const hx=P[0][0]-P[2][0],hy=P[0][1]-P[2][1],ang=Math.atan2(hy,hx)*180/Math.PI;
+ const head=`<g transform="translate(${f1(P[0][0])} ${f1(P[0][1])}) rotate(${f1(ang)})"><path d="M2.6 0 L5 -.9 M2.6 0 L5 .9 M2.6 0 L4.2 0" stroke="#ff2b4a" stroke-width=".5" stroke-linecap="round" fill="none"/>
+ <ellipse cx="0" cy="0" rx="3.5" ry="2.7" fill="${C[0]}" stroke="${C[1]}" stroke-width=".6"/><ellipse cx="-.4" cy="-.7" rx="2" ry="1" fill="${C[2]}" opacity=".55"/>
+ <circle cx="1.1" cy="-1.3" r=".85" fill="#fff"/><circle cx="1.1" cy="1.3" r=".85" fill="#fff"/><circle cx="1.35" cy="-1.3" r=".42" fill="#111"/><circle cx="1.35" cy="1.3" r=".42" fill="#111"/></g>`;
+ return o+f+head}
+function artSVG(){
+ let s='<defs><filter id="ds" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx=".4" dy=".8" stdDeviation=".55" flood-color="#000" flood-opacity=".55"/></filter></defs><g filter="url(#ds)">';
+ Object.keys(SNK.ladders).forEach(k=>{s+=ladderSVG(+k,SNK.ladders[k])});
+ let i=0;Object.keys(SNK.snakes).forEach(k=>{s+=snakeSVG(+k,SNK.snakes[k],i++)});
+ return s+"</g>"}
 function shell(){
- let b="";
- for(let rt=0;rt<10;rt++)for(let c=0;c<10;c++){const n=(9-rt)*10+c+1;
-  const cl=SNK.snakes[n]?" hs":SNK.ladders[n]?" ld":"";b+=`<div class="c1${cl}"><b>${n}</b></div>`}
- $("g").innerHTML=`<button class="alt sm" id="gback">‹ بازگشت</button>
+ let c="",nm="";
+ for(let rt=0;rt<10;rt++)for(let col=0;col<10;col++){const r=9-rt,i=r%2===0?col:9-col,n=r*10+i+1;
+  const k=SNK.snakes[n]?"hs":SNK.ladders[n]?"ld":n===100?"fin":"";
+  c+=`<div class="cl ${(rt+col)%2?"dk2":"lt"} ${k}"></div>`;
+  nm+=`<div style="position:relative"><b class="${k==="hs"?"h":k==="ld"?"l":k==="fin"?"f":""}">${n===100?"👑 100":n}</b></div>`}
+ $("g").innerHTML=`<div class="gbar"><button class="alt sm" id="gback">‹ بازگشت</button><button class="alt sm" id="gsnd">${SFX.on?"🔊 صدا":"🔇 بی‌صدا"}</button></div>
  <div id="gtop"></div>
- <div class="bw"><img src="/board.jpg" alt="" onerror="this.style.display='none';this.parentNode.classList.add('nobg')"><div class="ov">${b}<div class="tkl" id="tkl"></div></div></div>
- <div class="lg" id="glog"></div>`;
+ <div class="ban"></div>
+ <div class="bwrap"><div class="bw" id="bw"><div class="cg">${c}</div><svg class="art" viewBox="0 0 100 100">${artSVG()}</svg><div class="cg nm">${nm}</div><div class="tkl" id="tkl"></div></div>
+ <div class="stp">🚩 START</div></div>
+ <div class="lg" id="glog"></div>
+ <div class="dkw" id="gdock"><div class="dk"><div class="dice3" id="dc">${diceHTML()}</div><div class="dkr"><div class="dkt" id="dkt"></div><button id="rb">🎲 تاس بنداز</button></div></div></div>`;
  $("gback").onclick=()=>{stopGame();showTab(VIEW==="dash"?"games":VIEW);reloadDash()};
+ $("gsnd").onclick=()=>{SFX.set(!SFX.on);$("gsnd").textContent=SFX.on?"🔊 صدا":"🔇 بی‌صدا";if(SFX.on)SFX.tick()};
+ $("rb").onclick=roll;setDice(1,false);
  TKE={};DISP={};Q=Promise.resolve()}
 function openGame(gid,prac){
  stopGame();PRAC=!!prac;GID=gid;GS=null;
@@ -848,28 +990,30 @@ function applyG(g){
  if(sig!==SIG){SIG=sig;renderTop(g)}
  g.players.forEach(p=>{if(!TKE[p.id])setTok(p,FIRST?p.pos:0,false)});
  if(g.last&&g.last.seq!==LSEQ){
-  if(FIRST)g.players.forEach(p=>setTok(p,p.pos,false));
-  else{const d=$("dc");if(d){d.classList.add("shake");setTimeout(()=>d.classList.remove("shake"),600)}haptic("light");animMove(g,g.last)}
+  if(FIRST){g.players.forEach(p=>setTok(p,p.pos,false));setDice(g.last.r,false)}
+  else animMove(g,g.last)
   LSEQ=g.last.seq}
  else if(FIRST)g.players.forEach(p=>setTok(p,p.pos,false));
  Q=Q.then(()=>{if(GS!==g)return;g.players.forEach(p=>{if(DISP[p.id]!==p.pos||TKE[p.id].style.opacity!==(p.out?".35":"1"))setTok(p,p.pos,false)})});
  FIRST=false;
  if(["done","cancelled","refunded"].includes(g.status)){
-  if(g.status==="done"&&!g._shown){g._shown=1;Q=Q.then(()=>{toast(g.winner===g.me?"🏆 برنده شدی!":"🏁 "+nameOf(g,g.winner)+" برنده شد",3500);haptic(g.winner===g.me?"success":"warning")})}
+  if(g.status==="done"&&!g._shown){g._shown=1;Q=Q.then(()=>{SFX[g.winner===g.me?"win":"lose"]();toast(g.winner===g.me?"🏆 برنده شدی!":"🏁 "+nameOf(g,g.winner)+" برنده شد",3500);haptic(g.winner===g.me?"success":"warning")})}
   if(!PRAC){if(!STOPAT)STOPAT=Date.now()+8000;else if(Date.now()>STOPAT){clearInterval(PT);PT=null}}}}
 function animMove(g,L){
  const p=g.players.find(x=>x.id===L.pid);if(!p)return;
  Q=Q.then(async()=>{
+  await rollDice(L.r);
   if(!TKE[p.id])return;
   const land=Math.min(L.from+L.r,100);
   if(DISP[p.id]!==L.from){setTok(p,L.from,false);await sleep(60)}
-  for(let k=L.from+1;k<=land;k++){setTok(p,k,false);await sleep(170)}
+  for(let k=L.from+1;k<=land;k++){setTok(p,k,false,true);SFX.step(k);await sleep(190)}
   if(L.ev){
-   await sleep(350);
+   await sleep(300);
    const who=p.id===g.me?"تو":p.name;
-   if(L.ev==="snake"){toast("🐍 "+(p.id===g.me?"مار گازت گرفت!":"مار "+who+" رو گاز گرفت!")+" "+fa(land)+" ← "+fa(L.to),2800);haptic("error")}
-   else{toast("🪜 "+(p.id===g.me?"از نردبون رفتی بالا!":who+" از نردبون رفت بالا!")+" "+fa(land)+" ← "+fa(L.to),2800);haptic("success")}
-   setTok(p,L.to,true);await sleep(1000);
+   if(L.ev==="snake"){SFX.snake();const b=$("bw");if(b){b.classList.remove("quake");void b.offsetWidth;b.classList.add("quake")}
+    toast("🐍 "+(p.id===g.me?"مار گازت گرفت!":"مار "+who+" رو گاز گرفت!")+" "+fa(land)+" ← "+fa(L.to),2800);haptic("error")}
+   else{SFX.ladder();toast("🪜 "+(p.id===g.me?"از نردبون رفتی بالا!":who+" از نردبون رفت بالا!")+" "+fa(land)+" ← "+fa(L.to),2800);haptic("success")}
+   setTok(p,L.to,true);await sleep(1050);
   }
  })}
 function renderTop(g){
@@ -883,13 +1027,17 @@ function renderTop(g){
  const pl=g.players.map(p=>`<div class="pl ${p.id===g.turn&&g.status==="playing"?"cur":""} ${p.out?"out":""}"><u style="background:${COLORS[p.idx%4]}"></u><span>${esc(p.name)}${p.id===me&&!g.practice?" (تو)":""}</span><b>${p.pos?fa(p.pos):"شروع"}</b></div>`).join("");
  const L=g.last,ev=L?(L.ev==="ladder"?" 🪜":L.ev==="snake"?" 🐍":""):"";
  const lt=L?`${nm(L.pid)}: ${fa(L.r)} ← ${fa(L.from)} به ${fa(L.to)}${ev}${L.auto?" (خودکار)":""}`:"";
- const act=g.status==="playing"?`<div class="dice" id="dc">${L?FACE[L.r-1]:"🎲"}</div><div style="text-align:center;color:var(--hint);font-size:13px">${lt}</div>`+(mine?`<button id="rb">🎲 تاس بنداز</button>`:""):"";
  const money=g.practice?`<div class="row"><span>🤖 حالت تمرین</span><span>بدون الماس</span></div>`:`<div class="row"><span>💎 شرط هر نفر</span><span>${num(g.bet)}</span></div><div class="row"><span>🎁 جایزهٔ کل</span><span>${num(g.pot)}</span></div>`;
- $("gtop").innerHTML=`<div class="top">${top}</div>${money}${act}${pl}`;
+ $("gtop").innerHTML=`<div class="top">${top}</div>${money}${pl}`;
  $("glog").innerHTML=g.log.map(x=>esc(x)).join("<br>");
- const rb=$("rb");if(rb)rb.onclick=roll}
+ /* دکمهٔ تاس و خود تاس پایین صفحه (ثابت) */
+ const dk=$("gdock"),rb=$("rb");
+ if(dk){dk.style.display=g.status==="playing"?"block":"none";
+  $("dkt").innerHTML=lt||"اول تو تاس بنداز!";
+  rb.disabled=!mine||RB;rb.classList.toggle("go",mine);
+  rb.textContent=mine?"🎲 تاس بنداز":"⏳ نوبت "+nameOf(g,g.turn)}}
 async function roll(){
- if(RB)return;RB=true;const b=$("rb");if(b)b.disabled=true;
+ if(RB)return;RB=true;const b=$("rb");if(b)b.disabled=true;SFX.unlock();SFX.tick();
  try{
   if(PRAC){pRoll();return}
   const r=await api("/api/snk/roll",{gid:GID});if(r.game)applyG(r.game);if(r.error)toast(GE[r.error]||"خطا")}
@@ -913,7 +1061,7 @@ function pRoll(){
  if(pos>=100){g.status="done";g.winner=p.id}
  else if(r!==6)g.turn=(g.turn===1)?2:1;
  RB=false;applyG(g);
- if(g.status==="playing"&&g.turn===2)setTimeout(()=>{if(PON&&PG===g){RB=true;pRoll()}},(g.last&&g.last.ev?3200:1900))}
+ if(g.status==="playing"&&g.turn===2)setTimeout(()=>{if(PON&&PG===g){RB=true;pRoll()}},(g.last&&g.last.ev?4600:3000))}
 
 /* ---------- شروع ---------- */
 (async()=>{
